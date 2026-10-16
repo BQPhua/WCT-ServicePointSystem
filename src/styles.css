@@ -150,3 +150,7 @@ table.tbl { border-collapse: separate; border-spacing: 0; width: 100%; font-size
 .formula-row textarea { min-height: 40px; font-family: Consolas, Menlo, monospace; font-size: 13px; }
 .okmark { color: var(--ok); } .badmark { color: var(--bad); }
 @media (max-width: 700px) { .topbar { flex-wrap: wrap; } main { padding: 12px; } }
+
+.outlet-pick { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px 12px; margin: 0; }
+.outlet-pick legend { font-size: 12.5px; color: var(--muted); padding: 0 4px; }
+.outlet-pick .check { padding: 4px 0; }

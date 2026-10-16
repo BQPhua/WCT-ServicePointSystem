@@ -45,7 +45,7 @@
       const page = await pdf.getPage(i);
       const vp0 = page.getViewport({ scale: 1 });
       let rot = 0;
-      if (opts.rotate === 'auto' || opts.rotate === undefined) rot = vp0.height > vp0.width ? 270 : 0; // attendance logs are wide tables printed sideways
+      if (opts.rotate === 'auto' || opts.rotate === undefined) rot = (await pageLooksSideways(page, vp0)) ? 270 : 0;
       else rot = Number(opts.rotate) || 0;
       const vpR = page.getViewport({ scale: 1, rotation: (page.rotate + rot) % 360 });
       const scale = (opts.maxSide || 2200) / Math.max(vpR.width, vpR.height);
@@ -59,10 +59,37 @@
     return pages;
   }
 
+  // Auto-rotate: text lines on an upright page make the ink vary much more from row to row than from
+  // column to column; on a page printed sideways it is the other way round. (Checked on both the
+  // "List of Logs" printouts, which are sideways, and the "Daily Time Record" pages, which are upright.)
+  function inkProfileSideways(ctx, w, h) {
+    const data = ctx.getImageData(0, 0, w, h).data;
+    const rows = new Float64Array(h), cols = new Float64Array(w);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4; const g = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      if (g < 150) { rows[y]++; cols[x]++; }
+    }
+    const nv = (a) => { const m = a.reduce((s, v) => s + v, 0) / a.length; if (!m) return 0; return a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length / (m * m); };
+    return nv(cols) > nv(rows) * 1.15;
+  }
+  async function pageLooksSideways(page, vp0) {
+    const scale = 420 / Math.max(vp0.width, vp0.height);
+    const vp = page.getViewport({ scale });
+    const c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    return inkProfileSideways(ctx, c.width, c.height);
+  }
+
   async function imageFileToPage(file, n, rotate) {
     const url = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(file); });
     const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = url; });
-    const rot = Number(rotate === 'auto' ? 0 : rotate) || 0;
+    let rot = Number(rotate === 'auto' ? 0 : rotate) || 0;
+    if (rotate === 'auto' || rotate === undefined) {
+      const sc = 420 / Math.max(img.width, img.height); const t = document.createElement('canvas'); t.width = Math.round(img.width * sc); t.height = Math.round(img.height * sc);
+      const tc = t.getContext('2d', { willReadFrequently: true }); tc.fillStyle = '#fff'; tc.fillRect(0, 0, t.width, t.height); tc.drawImage(img, 0, 0, t.width, t.height);
+      if (inkProfileSideways(tc, t.width, t.height)) rot = 270;
+    }
     const scale = Math.min(1, 2200 / Math.max(img.width, img.height));
     const w = img.width * scale, h = img.height * scale;
     const canvas = document.createElement('canvas');
@@ -76,29 +103,35 @@
   // ------------------------------------------------------------------ prompts
   function extractionPrompt(settings, ctx) {
     const codes = settings.codes.map((c) => `${c.code} = ${c.desc}`).join('; ');
-    return `You are reading ONE page of a scanned "List of Logs" attendance report (fingerprint clock) from a Malaysian restaurant.
-Each employee block has a header line "Employee ID : … Employee Name : … Department : …", a row with day numbers 1..${ctx.dim},
-and under each day the punch times (e.g. "[10:00 ] 08:51 14:02 15:57 17:33" — "[10:00" is the scheduled start, the rest are punches; "." means nothing).
-HR staff have written on the printout by hand: leave codes on empty days (OFF, AL, PH, MC, HL, UPL, ML…), sometimes over punched days,
-times written by hand (e.g. "7pm", "10AM-8PM" = forgot to punch, still WORKED), circled totals next to the name (e.g. "31", "-1", "-3" — copy them as handwritten_total),
-and notes such as "PAVILION KL STAFF", "Start at GMM Genting 18/7/26", "Last day at GMM Genting 17/07/26", "RESIGN", "No break".
+    return `You are reading ONE page of a scanned attendance report from a Malaysian restaurant group (Grandmama's). The image may be slightly rotated or skewed – read it carefully.
+Two layouts are common:
+(A) "List of Logs" (fingerprint clock): MANY employees per page. Each block has "Employee ID : … Employee Name : … Department : …", a row of day numbers 1..28/29/30/31 (the report period),
+    and under each day the punch times (e.g. "[10:00 ] 08:51 14:02 15:57 17:33" — "[10:00" is the scheduled start, the rest are punches; "." means nothing).
+(B) "Daily Time Record": ONE employee per page with "Employee No.", "Name", "Shift", "Dept" and one row per date with columns Date, Day, Check In, Break Out/In, Check Out,
+    OverTime, LOW, OT, Total, UT, LT (lates), Others: Status (printed, e.g. "Rest Day", "Absent") and Holidays, and Remarks. At the bottom a printed TOTAL box
+    (Rest Day, Leave, Day Work, Absences, Lates…). In this layout: a day with any Check In or Check Out time = W; printed "Rest Day" = OFF; printed "Absent" with nothing
+    written in Remarks = ABSENT; a code hand-written in Remarks (PH, AL, MC, TRN, PL, HL, UPL…) REPLACES the printed status for that day; a value in the LT column = late (add note LATE).
+Any other layout: apply the same ideas.
+HR staff write on the printouts by hand: leave codes, times (e.g. "7pm", "10AM-8PM" = forgot to punch, still WORKED), a circled total near the name (e.g. "31", "-1", "-3" — copy it
+as handwritten_total), employee numbers added by hand, and notes such as "PAVILION KL STAFF", "KITCHEN", "Start at GMM Genting 18/7/26", "Last day 17/07/26", "RESIGN".
 
 Return JSON only, matching this shape:
-{"page": <page number>, "employees": [ {
+{"page": <page number>, "layout": "list_of_logs" | "daily_time_record" | "other", "company": "CHAMPION VISTA SDN BHD", "period_start": "2026-07-01", "period_end": "2026-07-31",
+ "employees": [ {
   "employee_id": "AT001", "name": "ADAM ABDUL RAHMAN", "department": "FT SERVICE",
   "continued_from_previous_page": false,   // true ONLY for a day grid at the very top of the page that has no header (it belongs to the last employee of the previous page)
   "grid_on_next_page": false,              // true when this header is the last thing on the page and its day grid is on the next page
-  "handwritten_total": "-2", "notes": "free text: every handwritten note about this employee",
-  "days": ["W|08:58", "OFF", "AL", "MC", "BLANK", ...]   // exactly ${ctx.dim} strings, day 1 first
+  "handwritten_total": "-2", "printed_totals": "Rest Day 8, Leave 0, Day Work 22, Absences 1, Lates 0", "notes": "every handwritten note about this employee",
+  "days": ["W|08:58", "OFF", "AL", "MC", "BLANK", ...]   // one string per day of the report period (28–31), day 1 first
 } ] }
 
-Rules for each day string, format CODE or CODE|first_punch_time or CODE|first_punch_time|note:
-- W = the day has punch times or handwritten working hours. Put the first real punch after 05:00 as first_punch_time (ignore "00:00"/"00:01" overnight punches).
-- A handwritten leave code on the day wins over the punches: write that code (e.g. "MC", "AL", "OFF", "PH", "HL", "UPL"). If the code is crossed out, ignore it.
-- Allowed codes: ${codes}. Map synonyms: "Unpaid", "UNP", "UWP", "NPL" -> UPL; "HS" -> HS; "Off", "0FF" -> OFF; "A/L" -> AL.
-- BLANK = no punches and no handwriting.
-- NOTEMP = days before the employee started / after the last day / after resignation, or days a staff from ANOTHER outlet was not helping here (use the notes).
-- Keep employees in the same order as on the page. Never invent employees. If a name is hand-written, copy it.
+Rules for each day string — CODE, or CODE|first_in_time, or CODE|first_in_time|note:
+- W = worked (punch / check-in / check-out time, or hand-written working hours). first_in_time = first real time after 05:00 in 24h HH:MM (ignore "00:00"/"00:01" overnight punches). Add note LATE if the report marks the day late.
+- A hand-written leave code on the day wins over printed values and punches: write that code (MC, AL, OFF, PH, HL, UPL, TRN, PL…). Ignore codes that are crossed out.
+- Allowed codes: ${codes}. Map synonyms: "Rest Day", "Off", "0FF", "RD" -> OFF; "A/L" -> AL; "Unpaid", "UNP", "UWP", "NPL" -> UPL; "HS" -> HS; "Absent" (printed, no remark) -> ABSENT.
+- BLANK = nothing printed and nothing written for that day (List of Logs layout).
+- NOTEMP = days before the employee started / after the last day or resignation, or days a staff from ANOTHER outlet was not helping here (use the notes).
+- Keep employees in page order. Never invent employees or days. Copy hand-written names / numbers as written.
 ${ctx.previous ? `\nThe previous page ended with employee "${ctx.previous.name}" (ID ${ctx.previous.employee_id || '?'})${ctx.previous.grid_on_next_page ? ' whose day grid continues at the top of this page' : ''}.` : ''}
 ${settings.ai.instructions ? `\nAdditional instructions from HR (external circumstances) — follow them:\n${settings.ai.instructions}` : ''}
 This is page ${ctx.page} of ${ctx.pages}.`;
@@ -107,11 +140,11 @@ This is page ${ctx.page} of ${ctx.pages}.`;
   const EXTRACT_SCHEMA = {
     type: 'OBJECT',
     properties: {
-      page: { type: 'INTEGER' },
+      page: { type: 'INTEGER' }, layout: { type: 'STRING' }, company: { type: 'STRING' }, period_start: { type: 'STRING' }, period_end: { type: 'STRING' },
       employees: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
         employee_id: { type: 'STRING' }, name: { type: 'STRING' }, department: { type: 'STRING' },
         continued_from_previous_page: { type: 'BOOLEAN' }, grid_on_next_page: { type: 'BOOLEAN' },
-        handwritten_total: { type: 'STRING' }, notes: { type: 'STRING' },
+        handwritten_total: { type: 'STRING' }, printed_totals: { type: 'STRING' }, notes: { type: 'STRING' },
         days: { type: 'ARRAY', items: { type: 'STRING' } },
       }, required: ['name', 'days'] } },
     },
@@ -270,7 +303,7 @@ This is page ${ctx.page} of ${ctx.pages}.`;
       }
       if (!ok) throw new Error(`Page ${i + 1}: ${err.message}`);
       const emps = (json.employees || []).map((e) => ({ ...e, page: i + 1 }));
-      out.push({ page: i + 1, employees: emps });
+      out.push({ page: i + 1, layout: json.layout || '', company: json.company || '', period_start: json.period_start || '', period_end: json.period_end || '', employees: emps });
       if (emps.length) previous = emps[emps.length - 1];
       onProgress && onProgress({ page: i + 1, pages: pages.length, status: 'done', count: emps.length, model: currentLabel(active.ai) });
     }
@@ -294,11 +327,23 @@ This is page ${ctx.page} of ${ctx.pages}.`;
           last.pages.push(pr.page);
           continue;
         }
-        recs.push({ employeeId: String(e.employee_id || '').trim(), name: String(e.name || '').trim(), department: String(e.department || '').trim(),
-          handwrittenTotal: e.handwritten_total || '', notes: e.notes || '', days, pages: [pr.page] });
+        const id = String(e.employee_id || '').trim().replace(/\.+$/, '');
+        const same = id && /\d/.test(id) && recs.find((r) => r.employeeId === id);
+        if (same) { // the same employee printed on another page (e.g. a 2-page Daily Time Record)
+          same.days = same.days.map((d, i) => (['BLANK', 'NOTEMP'].includes(d.code) && !['BLANK', 'NOTEMP'].includes(days[i].code) ? days[i] : d));
+          same.pages.push(pr.page); continue;
+        }
+        recs.push({ employeeId: id, name: String(e.name || '').trim().replace(/\s*\.$/, ''), department: String(e.department || '').trim(),
+          handwrittenTotal: e.handwritten_total || '', printedTotals: e.printed_totals || '', notes: e.notes || '', days, pages: [pr.page] });
       }
     }
     return recs;
+  }
+
+  // Report-level facts (company, period, layout) — the most common value across pages.
+  function reportMeta(pageResults) {
+    const pick = (k) => { const c = {}; pageResults.forEach((p) => { const v = String(p[k] || '').trim(); if (v) c[v] = (c[v] || 0) + 1; }); return Object.entries(c).sort((a, b) => b[1] - a[1]).map((x) => x[0])[0] || ''; };
+    return { company: pick('company'), periodStart: pick('period_start'), periodEnd: pick('period_end'), layout: pick('layout') };
   }
 
   function normaliseDays(arr, dim) {
@@ -308,7 +353,7 @@ This is page ${ctx.page} of ${ctx.pages}.`;
       let code = 'BLANK', firstIn = '', note = '';
       if (raw && typeof raw === 'object') { code = raw.code || 'BLANK'; firstIn = raw.in || raw.firstIn || ''; note = raw.note || ''; }
       else if (raw) { const p = String(raw).split('|'); code = p[0]; firstIn = p[1] || ''; note = p.slice(2).join('|'); }
-      code = String(code).trim().toUpperCase().replace(/^0FF$/, 'OFF').replace(/^A\/L$/, 'AL').replace(/^WORK(ED)?$/, 'W') || 'BLANK';
+      code = String(code).trim().toUpperCase().replace(/^0FF$/, 'OFF').replace(/^(REST\s*DAY|RD)$/, 'OFF').replace(/^A\/L$/, 'AL').replace(/^WORK(ED)?$/, 'W') || 'BLANK';
       out.push({ day: d, code, firstIn: firstIn.trim(), note: note.trim() });
     }
     return out;
@@ -335,7 +380,7 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
     return callModel(settings, [{ text: prompt }], { maxTokens: 8000 });
   }
 
-  const api = { PROVIDERS, MODEL_PRESETS, presetById, keyFor, withPreset, currentLabel, resolveModel, renderPdf, imageFileToPage, extractionPrompt, callModel, listModels, extractPages, mergePages, normaliseDays, reviewOutlet, parseJsonLoose };
+  const api = { PROVIDERS, MODEL_PRESETS, presetById, keyFor, withPreset, currentLabel, resolveModel, renderPdf, imageFileToPage, extractionPrompt, callModel, listModels, extractPages, mergePages, reportMeta, normaliseDays, inkProfileSideways, reviewOutlet, parseJsonLoose };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.GMM = root.GMM || {}; root.GMM.ai = api;
 })(typeof window !== 'undefined' ? window : globalThis);

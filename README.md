@@ -5,12 +5,20 @@ Browser-only HR tool: upload the scanned attendance log (e.g. ATSB PDF), let an 
 
 ## Run it
 Open `dist/GMM-ServiceCharge-Tool.html` in Chrome or Edge (double-click, or host it on any static site / SharePoint).
-Everything (ExcelJS, pdf.js, JSZip) is inlined, so only the AI call needs internet.
+Everything (ExcelJS, pdf.js, JSZip) is inlined, so only the AI call needs internet. **Only the attendance file is needed** — no previous Excel.
 
-1. **Master data** – import last month's `Service Charge - MMMyy.xlsx` and `Incentive - MMMyy.xlsx`. Set the payout month and the attendance month (days in month = L10).
-2. **Attendance (AI)** – drop the PDF, check page rotation, add any "external circumstances" for the AI, click *Read attendance with AI*. Save the extraction (.json) to reuse it without paying again.
-3. **Review & edit** – every input is editable; typed numbers override formulas (yellow). `?` buttons show each formula with that row's numbers, its Excel form, and an *Edit this formula* link. *AI review & summary* gives a plain-English summary and one-click suggestions.
-4. **Export** – one tab per outlet, live formulas, "Precision as displayed" on (same as the stakeholder file).
+1. **Attendance (AI)** – drop the scanned PDF/photos. Supported: "List of Logs" (many staff per page, printed sideways – auto-rotated) and
+   "Daily Time Record" (one staff per page, printed Status + handwritten Remarks such as PH / AL / MC / TRN). Pick the AI model, add any
+   external circumstances, click *Read attendance with AI*. Fix names / IDs in the table if needed. Save the extraction (.json) to reuse it.
+2. **Outlet & entitlement** – tick the outlet, the month and year, and the entitlement: *Service charge* and/or *Incentive*
+   (incentive only when the outlet hit its target). Enter service charge collected, net sales and the **incentive %** (default 1.5%, adjustable).
+   The staff list is created from the attendance; blank attendance is not recorded. Scan the next outlet's file to add more outlets.
+3. **Review & edit** – every input is editable; typed numbers override formulas (yellow). `?` buttons show each formula with that row's numbers,
+   its Excel form, and *Edit this formula*. Add HQ management once (they are not on outlet attendance) – they are remembered.
+4. **Export** – one Service Charge workbook (outlets with service charge ticked) and one Incentive workbook (outlets with incentive ticked).
+
+**Staff memory:** positions, join dates, status, points and outlet that HR types are remembered in the browser and pre-filled next month
+(Settings → Outlets & staff memory). The outlet list (company, Excel title, code, tab colour, central kitchen) is editable there too.
 
 ## AI models (Settings → AI, or the "AI model" picker on the Attendance step)
 | Choice | Key | Notes |
@@ -38,10 +46,11 @@ The AI only reads the log; all counting and money is done by the deterministic e
 - `node tests/compare_template.test.js` – engine re-computes all 8 SC tabs + 2 incentive tabs of the Aug-26 files: every point value identical, every staff amount within RM 0.01.
 - `node tests/export.test.js` + LibreOffice recalc + `python3 tests/compare_recalc.py` – exported formulas recalculate to the stakeholder values (1,980 values, max difference 0.00).
 - `node tests/attendance_e2e.test.js` – AI-style extraction → name matching → calculation reproduces the Genting tab.
-- `python3 tests/ui_e2e.py`, `python3 tests/ui_ai_mock.py` – Playwright tests of the built HTML (import, extraction load, edit, export; mocked Gemini 3.8 → quota → 3.5 fallback, mocked Claude run, AI review).
+- `fixtures/REFERENCE-central-kitchen-DTR-July2026-extraction.json` – my transcription of the Central Kitchen Daily Time Record scan (for testing / comparing the AI's reading).
+- `python3 tests/ui_e2e.py`, `python3 tests/ui_ai_mock.py` – Playwright tests of the built HTML: Daily Time Record read by a mocked Gemini → Central Kitchen SC + 2% incentive; List of Logs → Genting SC; export + LibreOffice recalc; Gemini 3.8 → quota → 3.5 fallback; Claude run; AI review.
 `fixtures/SAMPLE-genting-extraction-synthetic.json` is **synthetic** (built from the Excel), not a reading of the PDF.
 
 ## Code
-`src/engine.js` formulas/rules (pure, Node-testable) · `src/importer.js` reads stakeholder workbooks · `src/exporter.js` writes them ·
+`src/engine.js` formulas/rules, staff memory (pure, Node-testable) · `src/importer.js` reads stakeholder workbooks (tests only) · `src/exporter.js` writes them ·
 `src/ai.js` PDF rendering + providers + prompts · `src/app.js` UI · `build.js` → single-file `dist/`.
 Dev: `npm install` then open `index.html`; `node build.js` to rebuild.

@@ -158,6 +158,10 @@ table.tbl { border-collapse: separate; border-spacing: 0; width: 100%; font-size
 .okmark { color: var(--ok); } .badmark { color: var(--bad); }
 @media (max-width: 700px) { .topbar { flex-wrap: wrap; } main { padding: 12px; } }
 
+.outlet-pick { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px 12px; margin: 0; }
+.outlet-pick legend { font-size: 12.5px; color: var(--muted); padding: 0 4px; }
+.outlet-pick .check { padding: 4px 0; }
+
 </style>
 </head>
 <body>
@@ -169,8 +173,8 @@ table.tbl { border-collapse: separate; border-spacing: 0; width: 100%; font-size
   <button type="button" data-act="settings">Settings</button>
 </header>
 <nav class="steps" aria-label="Steps">
-  <div class="step" data-step="1" tabindex="0" role="button"><b>1</b>Master data</div>
-  <div class="step" data-step="2" tabindex="0" role="button"><b>2</b>Attendance (AI)</div>
+  <div class="step" data-step="1" tabindex="0" role="button"><b>1</b>Attendance (AI)</div>
+  <div class="step" data-step="2" tabindex="0" role="button"><b>2</b>Outlet &amp; entitlement</div>
   <div class="step" data-step="3" tabindex="0" role="button"><b>3</b>Review &amp; edit</div>
   <div class="step" data-step="4" tabindex="0" role="button"><b>4</b>Export Excel</div>
 </nav>
@@ -555,9 +559,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     ['RL', 'NODEDUCT', 'Replacement leave'],
     ['EL', 'NODEDUCT', 'Emergency leave (paid)'],
     ['CL', 'NODEDUCT', 'Compassionate leave'],
-    ['PL', 'NODEDUCT', 'Paternity leave'],
+    ['PL', 'NODEDUCT', 'Paternity / paid leave'],
     ['MAT', 'NODEDUCT', 'Maternity leave'],
     ['TRAINING', 'NODEDUCT', 'Training / outstation'],
+    ['TRN', 'NODEDUCT', 'Training'],
     ['MC', 'MC', 'Medical certificate'],
     ['HL', 'MC', 'Hospitalisation leave'],
     ['HS', 'MC', 'Hospitalisation (HS/MC = MC category)'],
@@ -588,7 +593,18 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     lateGraceMinutes: 0,
     lateCountPerDay: 0, // 0 = lateness counted for information only; e.g. 3 = every 3 lates = 1 day deducted
     sc: { distributePct: 0.8, ckPct: 0.11, minMode: 'point', minValue: 450 },
-    inc: { pct: 0.015, fwShare: 1, minMode: 'off', minValue: 0, excludeMgmt: true },
+    inc: { pct: 0.015, fwShare: 1, minMode: 'off', minValue: 0, excludeMgmt: true, headPoints: 2 },
+    // Outlets the attendance can be assigned to (Settings → Outlets). kind 'central' = funded by the other outlets' CK/HQ %.
+    outlets: [
+      { name: 'Pavilion KL', company: 'CHAMPION VISTA SDN BHD', title: 'PAVILION KUALA LUMPUR', code: 'PKL', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'Pavilion Bukit Jalil', company: 'CHAMPION VISTA SDN BHD', title: 'PAVILION BUKIT JALIL', code: 'PBJ', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'Intermark', company: 'CHAMPION VISTA SDN BHD', title: 'INTERMARK', code: 'INTERMARK', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'KLIA 1', company: 'CHAMPION VISTA SDN BHD', title: 'KLIA 1', code: 'KLIA 1', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'KLIA 2 (L2)', company: 'CHAMPION VISTA SDN BHD', title: 'KLIA 2 (L2)', code: 'KLIA 2 (L2)', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'KLIA 2 (L3)', company: 'CHAMPION VISTA SDN BHD', title: 'KLIA 2 (L3)', code: 'KLIA 2 (L3)', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'Genting', company: 'ALIRAN TIASA SDN BHD', title: 'GENTING', code: 'GENTING', kind: 'outlet', tab: 'FFFFFF00' },
+      { name: 'Central Kitchen', company: 'CHAMPION VISTA SDN BHD', title: 'CENTRAL KITCHEN', code: 'CENTRAL KITCHEN', kind: 'central', tab: 'FF92D050' },
+    ],
     codes: DEFAULT_CODES,
     formulas: Object.fromEntries(Object.entries(DEFAULT_FORMULAS).map(([k, v]) => [k, v.expr])),
     colors: {
@@ -658,7 +674,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       s.codes[code] = (s.codes[code] || 0) + 1;
       if (code === 'BLANK') s.blank++;
       switch (cat) {
-        case 'WORK': s.worked++; if (settings.lateDetection && isLate(rec.firstIn, settings.shiftStart, settings.lateGraceMinutes)) { s.late++; s.lateDays_.push(d); } break;
+        case 'WORK': s.worked++; if (/\bLATE\b/i.test(rec.note || '') || (settings.lateDetection && isLate(rec.firstIn, settings.shiftStart, settings.lateGraceMinutes))) { s.late++; s.lateDays_.push(d); } break;
         case 'NODEDUCT': s.nodeduct++; if (code in s) s[code]++; break;
         case 'MC': s.MC++; s.mcDays.push(d); break;
         case 'UPL': s.UPL++; s.uplDays.push(d); break;
@@ -685,7 +701,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // notEmployed, mc, upl, absent, lateDays, overrides{K,L,...}, fixedAmount, inIncentive
   function rowInputs(row, scheme, settings, dim) {
     const isFW = row.category === 'FW';
-    const base = scheme === 'inc' ? num(row.incBase, num(row.base, 1)) : num(row.base, 1);
+    const base = scheme === 'inc' ? num(row.incBase, row.outletHead && settings.inc.headPoints ? num(settings.inc.headPoints, 2) : num(row.base, 1)) : num(row.base, 1);
     const share = isFW ? (scheme === 'inc' ? num(settings.inc.fwShare, 1) : num(settings.fwShare, 0.25)) : 1;
     const companyShare = isFW && scheme === 'sc' ? num(settings.companyShare, 0.75) : 0;
     const upl = num(row.upl) + (settings.absentCountsAsUPL ? num(row.absent) : 0);
@@ -897,12 +913,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   function deptFromAttendance(d) {
     const x = String(d || '').toUpperCase();
-    if (x.includes('KITCHEN')) return 'KITCHEN';
-    if (x.includes('SERVICE')) return 'SERVICE';
-    return '';
+    if (x.includes('KITCHEN') || /CHEF|COOK|WOK|CUTTER/.test(x)) return 'KITCHEN';
+    if (x.includes('SERVICE') || /WAIT|CAPTAIN|CASHIER|BAR/.test(x)) return 'SERVICE';
+    return x.trim();
   }
-  function statusFromAttendance(d) {
+  const FW_PREFIX = { NHL: 'AGENT NHL', KHM: 'AGENT KHM', TFH: 'AGENT TFH', KCS: 'AGENT KCS', SS: 'AGENT SS', SMS: 'AGENT SMS', ED: 'EDISIJUTA' };
+  function statusFromAttendance(d, empId) {
+    const pre = (/^([A-Z]+)\d/i.exec(String(empId || '').trim()) || [])[1];
+    if (pre && FW_PREFIX[pre.toUpperCase()]) return { status: FW_PREFIX[pre.toUpperCase()], category: 'FW' };
+    if (pre && pre.toUpperCase() === 'CL') return { status: 'CASUAL LABOUR', category: 'CASUAL' };
     const x = String(d || '').toUpperCase().trim();
+    if (/^(ADMIN|DRIVER|CHEF|COOK|CASHIER|WAITER|WAITRESS|CAPTAIN|BAR|MANAGER|SUPERVISOR|STEWARD)/.test(x)) return { status: 'PERMANENT', category: 'PERM' };
     if (/^(FT|PT)?\s*(SERVICE|KITCHEN)$/.test(x) || x.startsWith('FT ')) return { status: 'PERMANENT', category: 'PERM' };
     if (x.includes('CASUAL')) return { status: 'CASUAL LABOUR', category: 'CASUAL' };
     if (x) return { status: 'AGENT ' + x, category: 'FW' };
@@ -918,7 +939,43 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return '';
   }
 
-  function applyAttendance(outlet, records, settings, dim) {
+  // ------------------------------------------------------------------ staff memory ("directory")
+  // Remembers what HR typed (position, join date, status, points…) so next month's attendance is pre-filled.
+  const PROFILE = ['dept', 'empNo', 'name', 'position', 'joinDate', 'resignDate', 'status', 'category', 'base', 'incBase', 'rasa', 'outletHead', 'fromOutlet', 'keepWithoutAttendance', 'inIncentive'];
+  const dirKey = (r) => (r.empNo && /\d/.test(r.empNo) ? 'id:' + normId(r.empNo) : 'nm:' + nameTokens(r.name).sort().join(' '));
+  function rememberOutlet(dir, outlet) {
+    for (const r of outlet.employees || []) {
+      if (!r.name || r.name === 'NEW STAFF' || r.name === 'HQ MANAGER') continue;
+      const prof = { outlet: outlet.sheetName, updated: Date.now() };
+      if (r.category === 'MGMT') prof.keepWithoutAttendance = true;
+      PROFILE.forEach((k) => { if (r[k] !== undefined && r[k] !== '') prof[k] = r[k]; });
+      dir[dirKey(r)] = prof;
+    }
+    return dir;
+  }
+  function lookupDirectory(dir, rec) {
+    if (!dir) return null;
+    if (rec.employeeId && /\d/.test(rec.employeeId) && dir['id:' + normId(rec.employeeId)]) return dir['id:' + normId(rec.employeeId)];
+    const k = 'nm:' + nameTokens(rec.name).sort().join(' ');
+    if (dir[k]) return dir[k];
+    let best = null, bs = 0;
+    for (const p of Object.values(dir)) { const sc = nameScore(rec.name, p.name); if (sc > bs) { bs = sc; best = p; } }
+    return bs >= 0.95 ? best : null;
+  }
+
+  // Build an outlet's staff list straight from the attendance file (no last-month workbook needed).
+  function buildOutletFromAttendance(outlet, records, settings, dim, dir, month) {
+    const keep = Object.values(dir || {}).filter((p) => p.keepWithoutAttendance && p.outlet === outlet.sheetName);
+    outlet.employees = keep.map((p) => newRow({ ...p, include: true, remembered: true }));
+    return applyAttendance(outlet, records, settings, dim, { createAll: true, dir, month });
+  }
+  function newRow(f) {
+    return { id: 'r' + Math.random().toString(36).slice(2, 9), dept: '', empNo: '', name: '', position: '', joinDate: '', resignDate: '', status: 'PERMANENT', category: 'PERM', base: 1,
+      rasa: false, outletHead: false, fromOutlet: '', helperNote: '', isNew: false, exitType: '', waiveTier: false, mc: 0, upl: 0, absent: 0, lateDays: 0, notEmployed: 0,
+      overrides: {}, incOverrides: {}, extraRemark: '', include: true, flags: [], ...f };
+  }
+
+  function applyAttendance(outlet, records, settings, dim, opts = {}) {
     const rows = outlet.employees;
     const report = { matched: [], added: [], blank: [], missing: [], mismatches: [] };
     const matches = matchAttendance(records, rows);
@@ -929,12 +986,22 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (s.allBlank) { report.blank.push(rec.name); if (m.row) { m.row.include = false; m.row.flags = ['Attendance blank – not recorded']; touched.add(m.row); } continue; }
       let row = m.row;
       if (!row) {
-        const st = statusFromAttendance(rec.department);
-        row = { id: 'r' + Math.random().toString(36).slice(2, 9), dept: deptFromAttendance(rec.department), empNo: rec.employeeId || '', attendanceId: rec.employeeId || '', name: rec.name,
-          position: '', joinDate: '', resignDate: '', status: st.status, category: st.category, base: 1, rasa: false, outletHead: false,
-          fromOutlet: helperOutlet(rec.notes, outlet.code), helperNote: '', isNew: false, exitType: '', waiveTier: false, overrides: {}, incOverrides: {}, extraRemark: '', include: true, addedFromAttendance: true };
+        const st = statusFromAttendance(rec.department, rec.employeeId);
+        const dept = deptFromAttendance(rec.department);
+        const known = opts.createAll ? lookupDirectory(opts.dir, rec) : null;
+        const rawDept = String(rec.department || '').toUpperCase().trim();
+        row = newRow({ dept, empNo: rec.employeeId || '', attendanceId: rec.employeeId || '', name: rec.name,
+          position: /^(ADMIN|DRIVER|CHEF|COOK|CASHIER|WAITER|WAITRESS|CAPTAIN|SUPERVISOR)$/.test(rawDept) ? rawDept : '', status: st.status, category: st.category, rasa: /^RG\d/i.test(rec.employeeId || ''),
+          fromOutlet: helperOutlet(rec.notes, outlet.code), addedFromAttendance: true });
+        if (known) { PROFILE.forEach((k) => { if (known[k] !== undefined && k !== 'keepWithoutAttendance') row[k] = known[k]; }); row.remembered = true; }
         if (row.fromOutlet) row.helperNote = `Helping from ${row.fromOutlet}`;
-        row.include = false; // not in the master list: HR ticks "Include" for genuine new joiners / helpers
+        // createAll: the attendance file IS the staff list. Otherwise (matching to an existing list) new names wait for HR.
+        row.include = opts.createAll ? !row.fromOutlet : false;
+        // staff who start / leave during the month (NOTEMP days at the start / end)
+        const firstEmp = rec.days.findIndex((d) => String(d.code).toUpperCase() !== 'NOTEMP');
+        const lastEmp = dim - 1 - [...rec.days].reverse().findIndex((d) => String(d.code).toUpperCase() !== 'NOTEMP');
+        if (!row.joinDate && firstEmp > 0 && opts.month) { row.joinDate = `${opts.month}-${String(firstEmp + 1).padStart(2, '0')}`; row.isNew = true; row.joinEstimated = true; }
+        if (!row.resignDate && lastEmp < dim - 1 && lastEmp >= 0 && /resign|last day/i.test(rec.notes || '') && opts.month) { row.resignDate = `${opts.month}-${String(lastEmp + 1).padStart(2, '0')}`; }
         rows.push(row); report.added.push(rec.name);
       } else report.matched.push({ att: rec.name, row: row.name, score: Math.round(m.score * 100) / 100 });
       touched.add(row);
@@ -949,7 +1016,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if (row.waiveTier && !/appeal|approved/i.test((row.template && row.template.remarks) || '')) row.waiveTier = false;
       }
       const flags = [];
-      if (row.addedFromAttendance) flags.push(row.fromOutlet ? `Staff of ${row.fromOutlet} helping here (${s.worked} days) – not given points; add to "Fixed SC approved by COO" or tick Include` : 'Not in master list – tick Include if new joiner, then fill position, status, join date');
+      if (row.addedFromAttendance && row.fromOutlet) flags.push(`Staff of ${row.fromOutlet} helping here (${s.worked} days) – not given points; add to "Fixed SC approved by COO" or tick Include`);
+      else if (row.addedFromAttendance && !opts.createAll) flags.push('Not in the staff list – tick Include if new joiner, then fill position, status, join date');
+      if (row.joinEstimated) flags.push(`Join date estimated from the log (first day ${row.joinDate.slice(8)}) – please confirm`);
+      if (opts.createAll && !row.remembered && row.category !== 'FW') row.info = 'New to this tool – fill position / join date once; it is remembered next month';
       if (s.ABSENT) flags.push(`${s.ABSENT} day(s) with no punch and no code (${s.absentDays.join(', ')}) counted as absent`);
       if (s.REVIEW) flags.push(`Unknown code on day(s) ${s.reviewDays.join(', ')}`);
       const ht = String(rec.handwrittenTotal || '').replace(/[()\s]/g, '');
@@ -965,7 +1035,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
     for (const r of rows) {
       if (touched.has(r)) continue;
-      if (r.category === 'MGMT' || r.keepWithoutAttendance || (r.fromOutlet && !r.addedFromAttendance)) { r.flags = []; r.info = 'Not on this attendance file – kept (management / helper)'; continue; }
+      if (r.category === 'MGMT' || r.keepWithoutAttendance || r.remembered || (r.fromOutlet && !r.addedFromAttendance)) { r.flags = []; r.info = 'Not on this attendance file – kept (management / helper)'; continue; }
       r.include = false; r.flags = ['No attendance record found – not recorded']; report.missing.push(r.name);
     }
     return report;
@@ -974,331 +1044,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   const api = {
     parse, evaluate, toExcel, identifiers, render, substitute, xlRound, FUNCS, VARIABLES, DEFAULT_FORMULAS, DEFAULT_SETTINGS, DEFAULT_CODES,
     mergeSettings, deepClone, daysInMonth, tierFor, codeCategory, summariseDays, isLate, rowInputs, computeRowPoints, allocateRow,
-    computeOutlet, computeWorkspace, includedRows, autoRemark, rowStyle, nameTokens, nameScore, normId, matchAttendance, deptFromAttendance, statusFromAttendance, num, applyAttendance, helperOutlet,
+    computeOutlet, computeWorkspace, includedRows, autoRemark, rowStyle, nameTokens, nameScore, normId, matchAttendance, deptFromAttendance, statusFromAttendance, num, applyAttendance, helperOutlet, buildOutletFromAttendance, rememberOutlet, lookupDirectory, newRow, dirKey,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.GMM = root.GMM || {}; root.GMM.engine = api;
-})(typeof window !== 'undefined' ? window : globalThis);
-
-</script>
-<script>/* src/importer.js */
-/* Import last month's stakeholder workbook(s) (Service Charge and/or Incentive) as the employee master.
- * Works with ExcelJS in the browser and in Node. Reads values (cached results for formula cells),
- * colours (fill + font), the summary inputs and the "Fixed Service Charge approved by COO" table.
- */
-(function (root) {
-  'use strict';
-  const E = (root.GMM && root.GMM.engine) || (typeof require !== 'undefined' ? require('./engine.js') : null);
-
-  const norm = (s) => String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
-
-  function cellVal(cell) {
-    let v = cell && cell.value;
-    if (v && typeof v === 'object') {
-      if (v instanceof Date) return v;
-      if ('result' in v) return v.result;
-      if ('formula' in v || 'sharedFormula' in v) return v.result;
-      if (v.richText) return v.richText.map((r) => r.text).join('');
-      if ('text' in v) return v.text;
-      if ('error' in v) return null;
-    }
-    return v;
-  }
-  function cellFormula(cell) {
-    const v = cell && cell.value;
-    if (v && typeof v === 'object') return v.formula || v.sharedFormula || null;
-    return null;
-  }
-  function hasContent(cell) { const v = cell && cell.value; return v !== null && v !== undefined && v !== ''; }
-
-  // Excel 2007 "Office" theme accents used in the stakeholder files
-  const THEME_MAP = { 9: 'MGMT', 5: 'FW', 6: 'CASUAL', 7: 'DEDUCT', 4: 'DEDUCT' };
-  function fillKind(cell) {
-    const f = cell && cell.fill;
-    if (!f || f.type !== 'pattern' || !f.fgColor) return null;
-    const c = f.fgColor;
-    if (c.argb) {
-      const a = c.argb.toUpperCase().slice(-6);
-      if (a === 'E1FFE1') return 'HELPER';
-      if (a === 'E2E9F2') return 'RASA';
-      if (a === 'FFFFCC') return 'HEAD';
-      return null;
-    }
-    if (c.theme !== undefined) return THEME_MAP[c.theme] || null;
-    return null;
-  }
-  function fontKind(cell) {
-    const c = cell && cell.font && cell.font.color;
-    if (!c || !c.argb) return null;
-    const a = c.argb.toUpperCase().slice(-6);
-    if (a === 'FF0000' || a === 'ED0000') return 'RED';
-    if (a === '0000FF') return 'BLUE';
-    return null;
-  }
-
-  const HEADER_KEYS = [
-    ['no.', 'no'], ['dept', 'dept'], ['employee no', 'empNo'], ['name', 'nameHdr'], ['position', 'position'], ['join date', 'joinDate'],
-    ['resignation date', 'resignDate'], ['status', 'status'], ['point entitlement', 'K'], ['days worked', 'L'], ['no of points (reserved)', 'N'],
-    ['operational mgmt', 'mgmt'], ['permenant', 'perm'], ['permanent', 'perm'], ['casual labour (entitle)', 'casual'], ['mc / hl', 'mc'], ['upl', 'upl'], ['lateness', 'late'],
-    ['pool', 'pool'], ['remarks', 'remarks'], ['deduction based on attendance', 'deduction'],
-  ];
-
-  function mapHeader(ws, r) {
-    const cols = {};
-    let pointsSeen = 0;
-    ws.getRow(r).eachCell({ includeEmpty: false }, (cell, c) => {
-      const h = norm(cellVal(cell));
-      if (!h) return;
-      if (h === 'no. of points') { cols[pointsSeen++ === 0 ? 'M' : 'poolPts'] = c; return; }
-      if (h.startsWith('mia / short notice')) { cols.mia = c; return; }
-      if (h.startsWith('mia') && (h.includes('foreign') || h.includes('agent'))) { cols.miaFW = c; return; }
-      if ((h.includes('foreign worker') || h.startsWith('agent')) && h.includes('0.75')) { cols.fw075 = c; return; }
-      if (h.includes('foreign worker') || h.startsWith('agent')) { cols.fw = c; return; }
-      for (const [k, key] of HEADER_KEYS) if (h === k || (k.length > 4 && h.startsWith(k))) { if (!(key in cols)) cols[key] = c; return; }
-    });
-    return cols;
-  }
-
-  function findCell(ws, pred, fromRow = 1) {
-    let hit = null;
-    ws.eachRow({ includeEmpty: false }, (row, r) => {
-      if (hit || r < fromRow) return;
-      row.eachCell({ includeEmpty: false }, (cell, c) => { if (!hit && pred(norm(cellVal(cell)), cell)) hit = { r, c, text: String(cellVal(cell)) }; });
-    });
-    return hit;
-  }
-  function numberRightOf(ws, hit, maxCols = 10) {
-    if (!hit) return null;
-    for (let c = hit.c + 1; c <= hit.c + maxCols; c++) {
-      const v = cellVal(ws.getCell(hit.r, c));
-      if (typeof v === 'number') return { value: v, r: hit.r, c };
-    }
-    return null;
-  }
-  const pctIn = (text) => { const m = /([\d.]+)\s*%/.exec(text || ''); return m ? parseFloat(m[1]) / 100 : null; };
-
-  function toDate(v) {
-    if (!v) return '';
-    if (v instanceof Date) return v.toISOString().slice(0, 10);
-    if (typeof v === 'number') return new Date(Math.round((v - 25569) * 864e5)).toISOString().slice(0, 10);
-    return String(v);
-  }
-
-  const MONTHS = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
-
-  function parseSheet(ws, schemeHint) {
-    const hdr = findCell(ws, (t) => t === 'employee no');
-    if (!hdr) return null;
-    const cols = mapHeader(ws, hdr.r);
-    const nameCol = cols.empNo + 1;
-    const title = String(cellVal(ws.getCell(1, 1)) || '');
-    const sub = String(cellVal(ws.getCell(2, 1)) || '');
-    const scheme = /INCENTIVE/i.test(sub) ? 'inc' : (schemeHint || 'sc');
-    const tparts = title.split(/\s+-\s+/).map((s) => s.trim());
-    const monthM = new RegExp(`(${MONTHS.join('|')})\\s+(\\d{4})`, 'i').exec(sub);
-    const dimCell = cols.L ? cellVal(ws.getCell(hdr.r - 1, cols.L)) : null;
-    const codeHit = findCell(ws, (t) => t.startsWith('details - gmm'));
-
-    const employees = [];
-    let r = hdr.r + 1;
-    for (; r <= ws.rowCount; r++) {
-      const name = cellVal(ws.getCell(r, nameCol));
-      const rowText = [cols.L, cols.K, cols.M].map((c) => norm(cellVal(ws.getCell(r, c - 1)))).join(' ') + ' ' + norm(cellVal(ws.getCell(r, cols.L)));
-      if (/total points/.test(rowText) || /total points/.test(norm(cellVal(ws.getCell(r, 7))))) break;
-      if (!name) { if (!cellVal(ws.getCell(r, cols.empNo))) continue; }
-      employees.push(readRow(ws, r, cols, nameCol, scheme));
-    }
-    const totalRow = r;
-
-    // Fixed Service Charge approved by COO (helpers paid a fixed RM)
-    const fixedRows = [];
-    const fixedHit = findCell(ws, (t) => t.startsWith('fixed service charge approved'), totalRow);
-    if (fixedHit) {
-      const fh = findCell(ws, (t) => t === 'employee no', fixedHit.r);
-      if (fh) {
-        const fcols = mapHeader(ws, fh.r);
-        for (let rr = fh.r + 1; rr <= fh.r + 60; rr++) {
-          const nm = cellVal(ws.getCell(rr, fcols.empNo + 1));
-          if (!nm) break;
-          const amt = [fcols.mgmt, fcols.perm, fcols.casual, fcols.fw].map((c) => c && cellVal(ws.getCell(rr, c))).find((x) => typeof x === 'number') || 0;
-          fixedRows.push({
-            fromOutlet: String(cellVal(ws.getCell(rr, fcols.dept)) || ''), empNo: String(cellVal(ws.getCell(rr, fcols.empNo)) || ''), name: String(nm),
-            position: String(cellVal(ws.getCell(rr, fcols.position)) || ''), joinDate: toDate(cellVal(ws.getCell(rr, fcols.joinDate))),
-            status: String(cellVal(ws.getCell(rr, fcols.status)) || '').trim(), days: cellVal(ws.getCell(rr, fcols.L)) || '', amount: amt,
-            remark: String(cellVal(ws.getCell(rr, fcols.remarks)) || ''),
-          });
-        }
-      }
-    }
-
-    const out = {
-      sheetName: ws.name, scheme, title, company: tparts[0] || '', brand: tparts[1] || "GRANDMAMA'S RESTAURANT", outletTitle: tparts.slice(2).join(' - ') || ws.name,
-      code: codeHit ? codeHit.text.replace(/^details\s*-\s*gmm\s*/i, '').trim() : ws.name.toUpperCase().slice(0, 4),
-      month: monthM ? `${monthM[2]}-${String(MONTHS.indexOf(monthM[1].toUpperCase()) + 1).padStart(2, '0')}` : '',
-      daysInMonth: typeof dimCell === 'number' ? dimCell : null,
-      tabColor: ws.properties && ws.properties.tabColor ? ws.properties.tabColor.argb : null,
-      colWidths: Array.from({ length: 40 }, (_, i) => ws.getColumn(i + 1).width || null),
-      employees, fixedRows,
-    };
-    if (scheme === 'sc') {
-      const coll = numberRightOf(ws, findCell(ws, (t) => t.startsWith('total service charge collected')));
-      const dist = findCell(ws, (t) => t.startsWith('distribute') && t.includes('service charge'));
-      const ck = findCell(ws, (t) => t.startsWith('less') && t.includes('central kitchen'));
-      out.scCollected = coll ? coll.value : 0;
-      out.distributePct = dist ? pctIn(dist.text) : null;
-      out.ckPct = ck ? pctIn(ck.text) : null;
-      const pv = numberRightOf(ws, findCell(ws, (t) => t.startsWith('1 service point')));
-      out.templatePointValue = pv ? pv.value : null;
-      const sel = findCell(ws, (t) => t.startsWith('(selected %'));
-      if (sel) { // Central Kitchen: funded by the CK/HQ % of the other outlets
-        out.kind = 'central'; out.ckSources = [];
-        for (let rr = sel.r + 1; rr < sel.r + 20; rr++) {
-          const lab = String(cellVal(ws.getCell(rr, sel.c)) || '');
-          const m = /^(.+?):\s*[\d.]+\s*%$/.exec(lab.trim());
-          if (!m) break;
-          const nv = numberRightOf(ws, { r: rr, c: sel.c });
-          out.ckSources.push({ outlet: m[1].trim(), amount: nv ? nv.value : 0 });
-        }
-      }
-    } else {
-      const ns = numberRightOf(ws, findCell(ws, (t) => t.startsWith('total net sales')));
-      const pc = findCell(ws, (t) => t.startsWith('distribute') && t.includes('net sales'));
-      out.netSales = ns ? ns.value : 0;
-      out.incPct = pc ? pctIn(pc.text) : null;
-      const pv = numberRightOf(ws, findCell(ws, (t) => t.startsWith('1 incentive point')));
-      out.templatePointValue = pv ? pv.value : null;
-    }
-    return out;
-  }
-
-  function readRow(ws, r, cols, nameCol, scheme) {
-    const g = (k) => (cols[k] ? ws.getCell(r, cols[k]) : null);
-    const v = (k) => (cols[k] ? cellVal(ws.getCell(r, cols[k])) : null);
-    const filled = (k) => cols[k] && hasContent(ws.getCell(r, cols[k]));
-    const status = String(v('status') || '').trim();
-    const fk = fillKind(ws.getCell(r, cols.empNo)) || fillKind(ws.getCell(r, nameCol));
-    const ft = fontKind(ws.getCell(r, nameCol)) || fontKind(ws.getCell(r, cols.empNo));
-    const remarks = String(v('remarks') || '');
-    let category = 'PERM';
-    if (filled('mgmt')) category = 'MGMT';
-    else if (filled('fw') || filled('fw075') || filled('miaFW') || filled('N')) category = 'FW';
-    else if (filled('casual') || /CASUAL/i.test(status)) category = 'CASUAL';
-    else if (/^(AGENT|EDISIJUTA)/i.test(status) || fk === 'FW') category = 'FW';
-    else if (fk === 'MGMT') category = 'MGMT';
-    else if (fk === 'CASUAL') category = 'CASUAL';
-    const K = Number(v('K')) || 0;
-    const L = Number(v('L')) || 0;
-    const mc = Number(v('mc')) || 0, upl = Number(v('upl')) || 0, late = Number(v('late')) || 0;
-    const dim = 31; // corrected after import when L10 is known
-    const isNew = ft === 'BLUE';
-    let base = 1;
-    if ([0.5, 1, 2].includes(K) && !(isNew || ft === 'RED') ) base = K;
-    else if (K >= 1.5) base = 2;
-    let exitType = '';
-    const entitledFilled = ['mgmt', 'perm', 'casual', 'fw'].some((k) => filled(k) && Number(v(k)) > 0);
-    if (filled('mia') || filled('miaFW')) exitType = 'MIA';
-    else if (filled('deduction') && !entitledFilled && mc + upl + late < 8) exitType = 'ROLLBACK';
-    else if (/resign with full notice/i.test(remarks)) exitType = 'RESIGN_FULL';
-    // deductible days reach a % tier but the stakeholder paid the normal prorated amount (e.g. appeal approved by COO)
-    const waiveTier = mc + upl + late >= 4 && !filled('deduction') && !exitType && entitledFilled;
-    const fromM = /(?:From|Helping)\s+([A-Z0-9 ()]+?)\s*:/i.exec(remarks);
-    const row = {
-      id: 'r' + Math.random().toString(36).slice(2, 9),
-      dept: String(v('dept') || ''), empNo: String(v('empNo') || '').trim(), name: String(cellVal(ws.getCell(r, nameCol)) || '').trim(),
-      position: String(v('position') || '').trim(), joinDate: toDate(v('joinDate')), resignDate: toDate(v('resignDate')), status,
-      category, base, rasa: fk === 'RASA' || /^rasa$/i.test(String(v('dept') || '')), outletHead: fk === 'HEAD',
-      fromOutlet: fk === 'HELPER' && fromM && /^from/i.test(fromM[0]) ? fromM[1].trim() : '', helperNote: fk === 'HELPER' ? remarks.split('\n')[0] : '',
-      isNew, exitType, waiveTier, mc, upl, absent: 0, lateDays: late, notEmployed: 0,
-      template: { K, L, Lformula: cellFormula(g('L')), mc, upl, late, remarks, fill: fk, font: ft,
-        Mconst: cols.M && !cellFormula(g('M')) && typeof v('M') === 'number' ? v('M') : null,
-        Nconst: cols.N && !cellFormula(g('N')) && typeof v('N') === 'number' ? v('N') : null,
-        amounts: Object.fromEntries(['M', 'N', 'mgmt', 'perm', 'casual', 'fw', 'mia', 'deduction', 'miaFW', 'fw075', 'poolPts', 'pool'].filter((k) => cols[k]).map((k) => [k, Number(v(k)) || 0])) },
-      extraRemark: '', overrides: {}, incOverrides: {}, include: true,
-    };
-    row._rawL = L; row._dimGuess = dim;
-    return row;
-  }
-
-  // Combine SC + Incentive workbooks into a workspace {month, daysInMonth, outlets:[...]}
-  async function importWorkbooks(files, ExcelJS) {
-    const outlets = new Map();
-    let month = '', dim = null;
-    const notes = [];
-    for (const f of files) {
-      const wb = new ExcelJS.Workbook();
-      await wb.xlsx.load(f.buffer);
-      const hint = /incentive/i.test(f.name) ? 'inc' : 'sc';
-      wb.eachSheet((ws) => {
-        if (ws.state && ws.state !== 'visible') return;
-        const p = parseSheet(ws, hint);
-        if (!p) return;
-        month = month || p.month; dim = dim || p.daysInMonth;
-        const key = p.sheetName.trim().toLowerCase();
-        if (p.scheme === 'sc') {
-          const o = outlets.get(key) || newOutlet(p);
-          Object.assign(o, { sheetName: p.sheetName, company: p.company, brand: p.brand, outletTitle: p.outletTitle, code: p.code, tabColor: p.tabColor, colWidths: p.colWidths,
-            scCollected: p.scCollected, fixedRows: p.fixedRows, templatePointValue: p.templatePointValue, scEnabled: true, kind: p.kind || 'outlet', ckSources: p.ckSources || [] });
-          if (p.distributePct) o.distributePct = p.distributePct; if (p.ckPct) o.ckPct = p.ckPct;
-          // merge incentive info already loaded
-          const prevInc = o._incRows || [];
-          o.employees = p.employees;
-          applyIncRows(o, prevInc);
-          outlets.set(key, o);
-        } else {
-          const o = outlets.get(key) || newOutlet(p);
-          o.incEnabled = true; o.netSales = p.netSales; o.incPct = p.incPct; o.templateIncPointValue = p.templatePointValue;
-          if (!o.employees.length) { o.employees = p.employees.map((e) => ({ ...e, inSC: false, inIncentive: true, incBase: e.base, incTemplate: e.template, incExitType: e.exitType, incWaiveTier: e.waiveTier })); o.scEnabled = false; }
-          else applyIncRows(o, p.employees);
-          o._incRows = p.employees;
-          outlets.set(key, o);
-        }
-        notes.push(`${f.name} → ${p.sheetName} (${p.scheme === 'sc' ? 'service charge' : 'incentive'}): ${p.employees.length} staff` + (p.fixedRows.length ? `, ${p.fixedRows.length} fixed-SC helpers` : ''));
-      });
-    }
-    dim = dim || (month ? E.daysInMonth(month) : 31);
-    for (const o of outlets.values()) {
-      delete o._incRows;
-      for (const e of o.employees) {
-        finaliseTemplateRow(e, e.template, dim, 'overrides', 'notEmployed', e.base);
-        if (e.incTemplate) finaliseTemplateRow(e, e.incTemplate, dim, 'incOverrides', 'incNotEmployed', e.incBase);
-        delete e._rawL; delete e._dimGuess;
-      }
-    }
-    return { month, daysInMonth: dim, outlets: [...outlets.values()], notes };
-  }
-
-  // Derive days not employed and keep the stakeholder's hand-keyed numbers (K, constant M/N) as overrides,
-  // so re-computing the template month reproduces the stakeholder file.
-  function finaliseTemplateRow(e, t, dim, ovKey, neKey, base) {
-    e[neKey] = Math.max(0, Math.round(dim - t.L - t.mc - t.upl - t.late));
-    t.ne = e[neKey];
-    const elig = dim - e[neKey];
-    const kCalc = elig >= dim ? base : Math.round(elig / dim * 100) / 100 * base;
-    e[ovKey] = e[ovKey] || {};
-    if (Math.abs(kCalc - t.K) > 0.0001) e[ovKey].K = t.K;
-    if (t.Mconst !== null && t.Mconst !== undefined) e[ovKey].M = t.Mconst;
-    if (t.Nconst !== null && t.Nconst !== undefined) e[ovKey].N = t.Nconst;
-  }
-
-  function newOutlet(p) {
-    return { id: 'o' + Math.random().toString(36).slice(2, 8), sheetName: p.sheetName, company: p.company, brand: p.brand, outletTitle: p.outletTitle, code: p.code,
-      tabColor: p.tabColor, colWidths: p.colWidths, employees: [], fixedRows: [], scCollected: 0, netSales: 0, scEnabled: false, incEnabled: false, attendance: null };
-  }
-
-  function applyIncRows(o, incRows) {
-    if (!incRows.length) return;
-    const byNo = new Map(incRows.map((r) => [E.normId(r.empNo), r]));
-    for (const e of o.employees) {
-      const ir = byNo.get(E.normId(e.empNo));
-      if (ir) { e.inIncentive = true; e.incBase = ir.base; e.incTemplate = ir.template; e.incExitType = ir.exitType; e.incWaiveTier = ir.waiveTier; byNo.delete(E.normId(e.empNo)); }
-      else e.inIncentive = false;
-    }
-    for (const ir of byNo.values()) o.employees.push({ ...ir, inSC: false, inIncentive: true, incBase: ir.base, incTemplate: ir.template, incExitType: ir.exitType, incWaiveTier: ir.waiveTier });
-  }
-
-  const api = { importWorkbooks, parseSheet, cellVal, cellFormula };
-  if (typeof module !== 'undefined' && module.exports) module.exports = api;
-  root.GMM = root.GMM || {}; root.GMM.importer = api;
 })(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
@@ -1804,7 +1553,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const page = await pdf.getPage(i);
       const vp0 = page.getViewport({ scale: 1 });
       let rot = 0;
-      if (opts.rotate === 'auto' || opts.rotate === undefined) rot = vp0.height > vp0.width ? 270 : 0; // attendance logs are wide tables printed sideways
+      if (opts.rotate === 'auto' || opts.rotate === undefined) rot = (await pageLooksSideways(page, vp0)) ? 270 : 0;
       else rot = Number(opts.rotate) || 0;
       const vpR = page.getViewport({ scale: 1, rotation: (page.rotate + rot) % 360 });
       const scale = (opts.maxSide || 2200) / Math.max(vpR.width, vpR.height);
@@ -1818,10 +1567,37 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return pages;
   }
 
+  // Auto-rotate: text lines on an upright page make the ink vary much more from row to row than from
+  // column to column; on a page printed sideways it is the other way round. (Checked on both the
+  // "List of Logs" printouts, which are sideways, and the "Daily Time Record" pages, which are upright.)
+  function inkProfileSideways(ctx, w, h) {
+    const data = ctx.getImageData(0, 0, w, h).data;
+    const rows = new Float64Array(h), cols = new Float64Array(w);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4; const g = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      if (g < 150) { rows[y]++; cols[x]++; }
+    }
+    const nv = (a) => { const m = a.reduce((s, v) => s + v, 0) / a.length; if (!m) return 0; return a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length / (m * m); };
+    return nv(cols) > nv(rows) * 1.15;
+  }
+  async function pageLooksSideways(page, vp0) {
+    const scale = 420 / Math.max(vp0.width, vp0.height);
+    const vp = page.getViewport({ scale });
+    const c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    return inkProfileSideways(ctx, c.width, c.height);
+  }
+
   async function imageFileToPage(file, n, rotate) {
     const url = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(file); });
     const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = url; });
-    const rot = Number(rotate === 'auto' ? 0 : rotate) || 0;
+    let rot = Number(rotate === 'auto' ? 0 : rotate) || 0;
+    if (rotate === 'auto' || rotate === undefined) {
+      const sc = 420 / Math.max(img.width, img.height); const t = document.createElement('canvas'); t.width = Math.round(img.width * sc); t.height = Math.round(img.height * sc);
+      const tc = t.getContext('2d', { willReadFrequently: true }); tc.fillStyle = '#fff'; tc.fillRect(0, 0, t.width, t.height); tc.drawImage(img, 0, 0, t.width, t.height);
+      if (inkProfileSideways(tc, t.width, t.height)) rot = 270;
+    }
     const scale = Math.min(1, 2200 / Math.max(img.width, img.height));
     const w = img.width * scale, h = img.height * scale;
     const canvas = document.createElement('canvas');
@@ -1835,29 +1611,35 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // ------------------------------------------------------------------ prompts
   function extractionPrompt(settings, ctx) {
     const codes = settings.codes.map((c) => `${c.code} = ${c.desc}`).join('; ');
-    return `You are reading ONE page of a scanned "List of Logs" attendance report (fingerprint clock) from a Malaysian restaurant.
-Each employee block has a header line "Employee ID : … Employee Name : … Department : …", a row with day numbers 1..${ctx.dim},
-and under each day the punch times (e.g. "[10:00 ] 08:51 14:02 15:57 17:33" — "[10:00" is the scheduled start, the rest are punches; "." means nothing).
-HR staff have written on the printout by hand: leave codes on empty days (OFF, AL, PH, MC, HL, UPL, ML…), sometimes over punched days,
-times written by hand (e.g. "7pm", "10AM-8PM" = forgot to punch, still WORKED), circled totals next to the name (e.g. "31", "-1", "-3" — copy them as handwritten_total),
-and notes such as "PAVILION KL STAFF", "Start at GMM Genting 18/7/26", "Last day at GMM Genting 17/07/26", "RESIGN", "No break".
+    return `You are reading ONE page of a scanned attendance report from a Malaysian restaurant group (Grandmama's). The image may be slightly rotated or skewed – read it carefully.
+Two layouts are common:
+(A) "List of Logs" (fingerprint clock): MANY employees per page. Each block has "Employee ID : … Employee Name : … Department : …", a row of day numbers 1..28/29/30/31 (the report period),
+    and under each day the punch times (e.g. "[10:00 ] 08:51 14:02 15:57 17:33" — "[10:00" is the scheduled start, the rest are punches; "." means nothing).
+(B) "Daily Time Record": ONE employee per page with "Employee No.", "Name", "Shift", "Dept" and one row per date with columns Date, Day, Check In, Break Out/In, Check Out,
+    OverTime, LOW, OT, Total, UT, LT (lates), Others: Status (printed, e.g. "Rest Day", "Absent") and Holidays, and Remarks. At the bottom a printed TOTAL box
+    (Rest Day, Leave, Day Work, Absences, Lates…). In this layout: a day with any Check In or Check Out time = W; printed "Rest Day" = OFF; printed "Absent" with nothing
+    written in Remarks = ABSENT; a code hand-written in Remarks (PH, AL, MC, TRN, PL, HL, UPL…) REPLACES the printed status for that day; a value in the LT column = late (add note LATE).
+Any other layout: apply the same ideas.
+HR staff write on the printouts by hand: leave codes, times (e.g. "7pm", "10AM-8PM" = forgot to punch, still WORKED), a circled total near the name (e.g. "31", "-1", "-3" — copy it
+as handwritten_total), employee numbers added by hand, and notes such as "PAVILION KL STAFF", "KITCHEN", "Start at GMM Genting 18/7/26", "Last day 17/07/26", "RESIGN".
 
 Return JSON only, matching this shape:
-{"page": <page number>, "employees": [ {
+{"page": <page number>, "layout": "list_of_logs" | "daily_time_record" | "other", "company": "CHAMPION VISTA SDN BHD", "period_start": "2026-07-01", "period_end": "2026-07-31",
+ "employees": [ {
   "employee_id": "AT001", "name": "ADAM ABDUL RAHMAN", "department": "FT SERVICE",
   "continued_from_previous_page": false,   // true ONLY for a day grid at the very top of the page that has no header (it belongs to the last employee of the previous page)
   "grid_on_next_page": false,              // true when this header is the last thing on the page and its day grid is on the next page
-  "handwritten_total": "-2", "notes": "free text: every handwritten note about this employee",
-  "days": ["W|08:58", "OFF", "AL", "MC", "BLANK", ...]   // exactly ${ctx.dim} strings, day 1 first
+  "handwritten_total": "-2", "printed_totals": "Rest Day 8, Leave 0, Day Work 22, Absences 1, Lates 0", "notes": "every handwritten note about this employee",
+  "days": ["W|08:58", "OFF", "AL", "MC", "BLANK", ...]   // one string per day of the report period (28–31), day 1 first
 } ] }
 
-Rules for each day string, format CODE or CODE|first_punch_time or CODE|first_punch_time|note:
-- W = the day has punch times or handwritten working hours. Put the first real punch after 05:00 as first_punch_time (ignore "00:00"/"00:01" overnight punches).
-- A handwritten leave code on the day wins over the punches: write that code (e.g. "MC", "AL", "OFF", "PH", "HL", "UPL"). If the code is crossed out, ignore it.
-- Allowed codes: ${codes}. Map synonyms: "Unpaid", "UNP", "UWP", "NPL" -> UPL; "HS" -> HS; "Off", "0FF" -> OFF; "A/L" -> AL.
-- BLANK = no punches and no handwriting.
-- NOTEMP = days before the employee started / after the last day / after resignation, or days a staff from ANOTHER outlet was not helping here (use the notes).
-- Keep employees in the same order as on the page. Never invent employees. If a name is hand-written, copy it.
+Rules for each day string — CODE, or CODE|first_in_time, or CODE|first_in_time|note:
+- W = worked (punch / check-in / check-out time, or hand-written working hours). first_in_time = first real time after 05:00 in 24h HH:MM (ignore "00:00"/"00:01" overnight punches). Add note LATE if the report marks the day late.
+- A hand-written leave code on the day wins over printed values and punches: write that code (MC, AL, OFF, PH, HL, UPL, TRN, PL…). Ignore codes that are crossed out.
+- Allowed codes: ${codes}. Map synonyms: "Rest Day", "Off", "0FF", "RD" -> OFF; "A/L" -> AL; "Unpaid", "UNP", "UWP", "NPL" -> UPL; "HS" -> HS; "Absent" (printed, no remark) -> ABSENT.
+- BLANK = nothing printed and nothing written for that day (List of Logs layout).
+- NOTEMP = days before the employee started / after the last day or resignation, or days a staff from ANOTHER outlet was not helping here (use the notes).
+- Keep employees in page order. Never invent employees or days. Copy hand-written names / numbers as written.
 ${ctx.previous ? `\nThe previous page ended with employee "${ctx.previous.name}" (ID ${ctx.previous.employee_id || '?'})${ctx.previous.grid_on_next_page ? ' whose day grid continues at the top of this page' : ''}.` : ''}
 ${settings.ai.instructions ? `\nAdditional instructions from HR (external circumstances) — follow them:\n${settings.ai.instructions}` : ''}
 This is page ${ctx.page} of ${ctx.pages}.`;
@@ -1866,11 +1648,11 @@ This is page ${ctx.page} of ${ctx.pages}.`;
   const EXTRACT_SCHEMA = {
     type: 'OBJECT',
     properties: {
-      page: { type: 'INTEGER' },
+      page: { type: 'INTEGER' }, layout: { type: 'STRING' }, company: { type: 'STRING' }, period_start: { type: 'STRING' }, period_end: { type: 'STRING' },
       employees: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
         employee_id: { type: 'STRING' }, name: { type: 'STRING' }, department: { type: 'STRING' },
         continued_from_previous_page: { type: 'BOOLEAN' }, grid_on_next_page: { type: 'BOOLEAN' },
-        handwritten_total: { type: 'STRING' }, notes: { type: 'STRING' },
+        handwritten_total: { type: 'STRING' }, printed_totals: { type: 'STRING' }, notes: { type: 'STRING' },
         days: { type: 'ARRAY', items: { type: 'STRING' } },
       }, required: ['name', 'days'] } },
     },
@@ -2029,7 +1811,7 @@ This is page ${ctx.page} of ${ctx.pages}.`;
       }
       if (!ok) throw new Error(`Page ${i + 1}: ${err.message}`);
       const emps = (json.employees || []).map((e) => ({ ...e, page: i + 1 }));
-      out.push({ page: i + 1, employees: emps });
+      out.push({ page: i + 1, layout: json.layout || '', company: json.company || '', period_start: json.period_start || '', period_end: json.period_end || '', employees: emps });
       if (emps.length) previous = emps[emps.length - 1];
       onProgress && onProgress({ page: i + 1, pages: pages.length, status: 'done', count: emps.length, model: currentLabel(active.ai) });
     }
@@ -2053,11 +1835,23 @@ This is page ${ctx.page} of ${ctx.pages}.`;
           last.pages.push(pr.page);
           continue;
         }
-        recs.push({ employeeId: String(e.employee_id || '').trim(), name: String(e.name || '').trim(), department: String(e.department || '').trim(),
-          handwrittenTotal: e.handwritten_total || '', notes: e.notes || '', days, pages: [pr.page] });
+        const id = String(e.employee_id || '').trim().replace(/\.+$/, '');
+        const same = id && /\d/.test(id) && recs.find((r) => r.employeeId === id);
+        if (same) { // the same employee printed on another page (e.g. a 2-page Daily Time Record)
+          same.days = same.days.map((d, i) => (['BLANK', 'NOTEMP'].includes(d.code) && !['BLANK', 'NOTEMP'].includes(days[i].code) ? days[i] : d));
+          same.pages.push(pr.page); continue;
+        }
+        recs.push({ employeeId: id, name: String(e.name || '').trim().replace(/\s*\.$/, ''), department: String(e.department || '').trim(),
+          handwrittenTotal: e.handwritten_total || '', printedTotals: e.printed_totals || '', notes: e.notes || '', days, pages: [pr.page] });
       }
     }
     return recs;
+  }
+
+  // Report-level facts (company, period, layout) — the most common value across pages.
+  function reportMeta(pageResults) {
+    const pick = (k) => { const c = {}; pageResults.forEach((p) => { const v = String(p[k] || '').trim(); if (v) c[v] = (c[v] || 0) + 1; }); return Object.entries(c).sort((a, b) => b[1] - a[1]).map((x) => x[0])[0] || ''; };
+    return { company: pick('company'), periodStart: pick('period_start'), periodEnd: pick('period_end'), layout: pick('layout') };
   }
 
   function normaliseDays(arr, dim) {
@@ -2067,7 +1861,7 @@ This is page ${ctx.page} of ${ctx.pages}.`;
       let code = 'BLANK', firstIn = '', note = '';
       if (raw && typeof raw === 'object') { code = raw.code || 'BLANK'; firstIn = raw.in || raw.firstIn || ''; note = raw.note || ''; }
       else if (raw) { const p = String(raw).split('|'); code = p[0]; firstIn = p[1] || ''; note = p.slice(2).join('|'); }
-      code = String(code).trim().toUpperCase().replace(/^0FF$/, 'OFF').replace(/^A\/L$/, 'AL').replace(/^WORK(ED)?$/, 'W') || 'BLANK';
+      code = String(code).trim().toUpperCase().replace(/^0FF$/, 'OFF').replace(/^(REST\s*DAY|RD)$/, 'OFF').replace(/^A\/L$/, 'AL').replace(/^WORK(ED)?$/, 'W') || 'BLANK';
       out.push({ day: d, code, firstIn: firstIn.trim(), note: note.trim() });
     }
     return out;
@@ -2094,7 +1888,7 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
     return callModel(settings, [{ text: prompt }], { maxTokens: 8000 });
   }
 
-  const api = { PROVIDERS, MODEL_PRESETS, presetById, keyFor, withPreset, currentLabel, resolveModel, renderPdf, imageFileToPage, extractionPrompt, callModel, listModels, extractPages, mergePages, normaliseDays, reviewOutlet, parseJsonLoose };
+  const api = { PROVIDERS, MODEL_PRESETS, presetById, keyFor, withPreset, currentLabel, resolveModel, renderPdf, imageFileToPage, extractionPrompt, callModel, listModels, extractPages, mergePages, reportMeta, normaliseDays, inkProfileSideways, reviewOutlet, parseJsonLoose };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.GMM = root.GMM || {}; root.GMM.ai = api;
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -2104,7 +1898,7 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
 /* GMM Service Charge & Incentive Tool — user interface (vanilla JS, no login, everything stays in this browser). */
 (function () {
   'use strict';
-  const E = GMM.engine, I = GMM.importer, X = GMM.exporter, AI = GMM.ai;
+  const E = GMM.engine, X = GMM.exporter, AI = GMM.ai;
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -2124,6 +1918,7 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
   const state = {
     settings: E.mergeSettings(savedSettings),
     ws: store.get('gmm.workspace'),
+    dir: store.get('gmm.directory') || {}, // staff memory: positions, join dates, points HR typed in earlier months
     ui: { step: 1, outletId: null, scheme: 'sc', drawerRow: null, settingsTab: 'ai', att: { pages: [], pageResults: null, records: null, rotate: 'auto', fileName: '', progress: null, outletId: null } },
     results: null,
   };
@@ -2143,7 +1938,11 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
   let saveTimer = null;
   function saveWorkspace() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { if (state.ws && !store.set('gmm.workspace', state.ws)) toast('Browser storage is full or blocked — use "Save backup" to keep your work.'); }, 300);
+    saveTimer = setTimeout(() => {
+      if (!state.ws) return;
+      if (!store.set('gmm.workspace', state.ws)) toast('Browser storage is full or blocked — use "Save backup" to keep your work.');
+      state.ws.outlets.forEach((o) => E.rememberOutlet(state.dir, o)); store.set('gmm.directory', state.dir);
+    }, 300);
   }
   function recompute() {
     if (!state.ws) { state.results = null; return; }
@@ -2163,102 +1962,43 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
     const now = new Date(); const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     return { month: ym, attendanceMonth: shiftMonth(ym, -1), daysInMonth: E.daysInMonth(shiftMonth(ym, -1)), outlets: [] };
   }
+  function ensureWs() { if (!state.ws) state.ws = newWorkspace(); return state.ws; }
 
   // ------------------------------------------------------------------ rendering shell
   function render() {
     recompute();
     const ws = state.ws;
-    $('#monthPill').textContent = ws ? `Payout ${monthLabel(ws.month)} · Attendance ${monthLabel(ws.attendanceMonth)} (${ws.daysInMonth} days)` : 'No data loaded';
+    $('#monthPill').textContent = ws && ws.outlets.length ? `Payout ${monthLabel(ws.month)} · Attendance ${monthLabel(ws.attendanceMonth)} (${ws.daysInMonth} days) · ${ws.outlets.length} outlet(s)` : 'Start by uploading attendance';
     $$('.step').forEach((b) => { const s = Number(b.dataset.step); b.classList.toggle('active', s === state.ui.step); b.classList.toggle('done', s < state.ui.step); });
     const v = $('#view');
-    if (state.ui.step === 1) v.innerHTML = viewMaster();
-    else if (state.ui.step === 2) v.innerHTML = viewAttendance();
+    if (state.ui.step === 1) v.innerHTML = viewAttendance();
+    else if (state.ui.step === 2) v.innerHTML = viewOutlets();
     else if (state.ui.step === 3) v.innerHTML = viewReview();
     else v.innerHTML = viewExport();
     if (state.ui.drawerRow) renderDrawer();
   }
   function go(step) { state.ui.step = step; closePopover(); render(); window.scrollTo(0, 0); }
 
-  // ------------------------------------------------------------------ step 1: master data
-  function viewMaster() {
-    const ws = state.ws;
-    const outlets = ws ? ws.outlets : [];
-    return `
-    <div class="grid2">
-      <section class="card">
-        <div class="card-head"><h2>1. Import last month's files</h2></div>
-        <p class="muted">Upload the stakeholder's <b>Service Charge</b> and/or <b>Incentive</b> workbook from last month. The tool reads every outlet tab and keeps
-        each staff member's department, position, join date, status, point entitlement, colour coding and the "Fixed SC approved by COO" table.
-        Attendance-driven columns are then refreshed from the new attendance file.</p>
-        <div class="dropzone" id="xlsxDrop" tabindex="0" role="button" aria-label="Choose Excel files">
-          <b>Drop .xlsx files here</b> or click to choose (you can select both files at once)
-          <input type="file" id="xlsxInput" accept=".xlsx" multiple hidden>
-        </div>
-        ${ws && ws.importNotes ? `<div class="notice" style="margin-top:10px">${ws.importNotes.map(esc).join('<br>')}</div>` : ''}
-      </section>
-      <section class="card">
-        <div class="card-head"><h2>Months</h2></div>
-        ${ws ? `
-        <div class="row">
-          <label class="field">Payout month (title of the Excel)<input type="month" data-ws="month" value="${esc(ws.month)}"></label>
-          <label class="field">Attendance month (the ATSB log)<input type="month" data-ws="attendanceMonth" value="${esc(ws.attendanceMonth)}"></label>
-          <label class="field">Days in attendance month<input type="number" min="28" max="31" data-ws="daysInMonth" value="${ws.daysInMonth}"></label>
-        </div>
-        <p class="small muted">The stakeholder's "${esc(monthLabel(ws.month))}" file is calculated from the previous month's attendance. Days in month = cell L10.</p>
-        <div class="row" style="margin-top:8px">
-          <button class="btn" data-act="rollMonth">Start next month…</button>
-          <span class="small muted">Moves both months forward and clears last month's MC/UPL, exit status, appeals, remarks and hand-keyed overrides.</span>
-        </div>` : `<p class="muted">Import a workbook first, or <button class="btn sm" data-act="blankWs">start an empty workspace</button>.</p>`}
-      </section>
-    </div>
-    ${ws ? `
-    <section class="card">
-      <div class="card-head"><h2>Outlets</h2><span class="spacer"></span>
-        <button class="btn sm" data-act="addOutlet">+ Add outlet</button>
-        <button class="btn sm" data-act="saveBackup">Save backup (.json)</button>
-        <label class="btn sm">Load backup<input type="file" id="backupInput" accept=".json" hidden></label>
-        <button class="btn sm danger" data-act="resetWs">Clear all data</button></div>
-      <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>Tab / outlet</th><th>Company</th><th>Code</th><th>Staff</th><th>Service charge collected (RM)</th><th>Incentive</th><th>Net sales (RM)</th><th>1 service point</th><th>1 incentive point</th><th></th></tr></thead>
-        <tbody>${outlets.map((o) => {
-          const r = state.results && state.results[o.id] || {};
-          return `<tr>
-            <td><input type="text" data-o="${o.id}" data-of="sheetName" value="${esc(o.sheetName)}" style="width:150px"> ${o.kind === 'central' ? '<span class="tag">central kitchen</span>' : ''}</td>
-            <td><input type="text" data-o="${o.id}" data-of="company" value="${esc(o.company)}" style="width:220px"></td>
-            <td><input type="text" data-o="${o.id}" data-of="code" value="${esc(o.code)}" style="width:90px"></td>
-            <td class="num">${o.employees.filter((e) => e.include !== false).length} / ${o.employees.length}</td>
-            <td>${o.kind === 'central' ? '<span class="small muted">from other outlets\' CK %</span>' : `<input type="number" step="0.01" data-o="${o.id}" data-of="scCollected" value="${o.scCollected || 0}" style="width:130px">`}</td>
-            <td class="center"><input type="checkbox" data-o="${o.id}" data-of="incEnabled" ${o.incEnabled ? 'checked' : ''} aria-label="Incentive enabled"></td>
-            <td>${o.incEnabled ? `<input type="number" step="0.01" data-o="${o.id}" data-of="netSales" value="${o.netSales || 0}" style="width:130px">` : '<span class="muted small">off</span>'}</td>
-            <td class="num">${r.sc ? rm(r.sc.summary.PointValue) : ''}</td>
-            <td class="num">${r.inc ? rm(r.inc.summary.PointValue) : ''}</td>
-            <td><button class="btn sm" data-act="openOutlet" data-id="${o.id}">Review →</button></td></tr>`;
-        }).join('')}</tbody></table></div>
-    </section>` : ''}`;
-  }
-
-  // ------------------------------------------------------------------ step 2: attendance
+  // ------------------------------------------------------------------ step 1: attendance (AI)
   function viewAttendance() {
-    const ws = state.ws; const a = state.ui.att; const s = state.settings;
-    if (!ws || !ws.outlets.length) return `<section class="card"><h2>2. Attendance</h2><p>Import last month's workbook first (step 1) so attendance can be matched to the employee master.</p><button class="btn primary" data-act="go" data-step="1">Go to step 1</button></section>`;
+    const a = state.ui.att; const s = state.settings;
     const prov = AI.PROVIDERS[s.ai.provider] || AI.PROVIDERS.gemini;
-    const recs = a.records;
     return `
     <div class="grid2">
       <section class="card">
-        <div class="card-head"><h2>2. Upload attendance (ATSB log)</h2></div>
+        <div class="card-head"><h2>1. Upload attendance</h2></div>
+        <p class="muted small">Scanned PDF or photos. Works with the "List of Logs" printout (many staff per page, e.g. ATSB) and the "Daily Time Record" (one staff per page),
+        including HR's handwritten codes (OFF, AL, PH, MC, TRN…) and circled totals. No previous Excel files are needed.</p>
         <div class="dropzone" id="attDrop" tabindex="0" role="button" aria-label="Choose attendance file">
-          <b>Drop the scanned attendance PDF (or photos) here</b> or click to choose
+          <b>Drop the attendance PDF (or photos) here</b> or click to choose
           <input type="file" id="attInput" accept=".pdf,image/*" multiple hidden>
         </div>
         ${a.pages.length ? `
-          <div class="row" style="margin-top:10px"><b>${esc(a.fileName)}</b><span class="muted">${a.pages.length} page(s)</span><span class="spacer"></span>
+          <div class="row" style="margin-top:10px"><b>${esc(a.fileName)}</b><span class="muted">${a.pages.length} page(s)</span><span class="spacer" style="flex:1"></span>
             <label class="field" style="flex-direction:row;align-items:center;gap:6px">Rotate pages
-              <select id="rotSel">${['auto', '0', '90', '180', '270'].map((r) => `<option value="${r}" ${String(a.rotate) === r ? 'selected' : ''}>${r === 'auto' ? 'Auto' : r + '°'}</option>`).join('')}</select></label></div>
+              <select id="rotSel">${['auto', '0', '90', '180', '270'].map((r) => `<option value="${r}" ${String(a.rotate) === r ? 'selected' : ''}>${r === 'auto' ? 'Auto-detect' : r + '°'}</option>`).join('')}</select></label></div>
           <div class="thumbs" style="margin-top:8px">${a.pages.map((p, i) => `<img src="${p.dataUrl}" alt="Page ${i + 1}" data-act="zoomPage" data-i="${i}">`).join('')}</div>
-          <p class="small muted">Pages should read left-to-right (upright). If not, change "Rotate pages".</p>` : ''}
-        <label class="field" style="margin-top:10px">Apply to outlet
-          <select id="attOutlet">${ws.outlets.map((o) => `<option value="${o.id}" ${o.id === (a.outletId || state.ui.outletId) ? 'selected' : ''}>${esc(o.sheetName)}</option>`).join('')}</select></label>
+          <p class="small muted">Pages should read upright. Auto-detect turns sideways printouts; if a page still looks wrong, pick a rotation.</p>` : ''}
       </section>
       <section class="card">
         <div class="card-head"><h2>AI reading</h2><span class="spacer"></span><button class="btn sm" data-act="settings" data-tab="ai">AI settings</button></div>
@@ -2268,7 +2008,7 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
         <label class="field">External circumstances / extra instructions for the AI (optional)
           <textarea id="aiInstr" placeholder="e.g. Outlet closed 15 July for renovation – treat as PH for everyone.\nAdam's MC on 22 July was appealed and approved by COO – do not deduct.\nKesh Bahadur transferred to KLIA 2 from 18 July.">${esc(s.ai.instructions || '')}</textarea></label>
         <div class="row" style="margin-top:10px">
-          <button class="btn primary" data-act="extract" ${a.pages.length ? '' : 'disabled'}>Read attendance with AI</button>
+          <button class="btn primary" data-act="extract" ${a.pages.length && !a.busy ? '' : 'disabled'}>Read attendance with AI</button>
           ${a.busy ? '<button class="btn" data-act="cancelExtract">Cancel</button>' : ''}
           <label class="btn">Load extraction (.json)<input type="file" id="extractInput" accept=".json" hidden></label>
           ${a.pageResults ? '<button class="btn" data-act="saveExtract">Save extraction (.json)</button>' : ''}
@@ -2278,39 +2018,119 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
         <p class="small muted" style="margin-top:10px">Tip: save the extraction after a successful run — you can reload it later without paying for / waiting on the AI again.</p>
       </section>
     </div>
-    ${recs ? attendanceTable(recs) : ''}`;
+    ${a.records ? attendanceTable(a.records) : ''}`;
   }
 
   function dayStrip(days) {
     const s = state.settings;
-    return `<span class="days">${days.map((d) => { const cat = E.codeCategory(d.code, s); const lab = d.code === 'W' ? '' : d.code === 'BLANK' ? '·' : d.code === 'NOTEMP' ? '' : d.code.slice(0, 3);
+    return `<span class="days">${days.map((d) => { const cat = E.codeCategory(d.code, s); const lab = d.code === 'W' ? (/LATE/i.test(d.note) ? 'L' : '') : d.code === 'BLANK' ? '·' : d.code === 'NOTEMP' ? '' : d.code.slice(0, 3);
       return `<span class="day ${cat}" title="Day ${d.day}: ${esc(d.code)}${d.firstIn ? ' · in ' + esc(d.firstIn) : ''}${d.note ? ' · ' + esc(d.note) : ''}">${esc(lab)}</span>`; }).join('')}</span>`;
   }
 
   function attendanceTable(recs) {
-    const o = outlet(state.ui.att.outletId) || ensureOutlet();
-    const dim = state.ws.daysInMonth;
-    const matches = E.matchAttendance(recs, o.employees);
-    const opts = o.employees.map((r) => `<option value="${r.id}">${esc(r.name)} (${esc(r.empNo)})</option>`).join('');
+    const a = state.ui.att; const dim = a.dim || (state.ws && state.ws.daysInMonth) || 31; const m = a.meta || {};
+    const blank = recs.filter((r) => E.summariseDays(r.days, state.settings, dim).allBlank).length;
     return `<section class="card">
-      <div class="card-head"><h2>What the AI read — ${recs.length} staff</h2><span class="spacer"></span>
-        <span class="legend">${['WORK:worked', 'NODEDUCT:OFF/AL/PH (no deduction)', 'MC:MC/HL', 'UPL:UPL', 'ABSENT:absent / blank', 'NOTEMP:not employed', 'REVIEW:unknown code'].map((x) => { const [c, l] = x.split(':'); return `<span><span class="day ${c}" style="display:inline-block;width:14px;height:12px"></span> ${l}</span>`; }).join('')}</span></div>
+      <div class="card-head"><h2>What the AI read — ${recs.length} staff</h2>
+        <span class="small muted">${[m.company, m.periodStart && m.periodEnd ? `${m.periodStart} → ${m.periodEnd}` : '', m.layout ? m.layout.replace(/_/g, ' ') : '', blank ? `${blank} with blank attendance (not recorded)` : ''].filter(Boolean).map(esc).join(' · ')}</span>
+        <span class="spacer"></span>
+        <span class="legend">${['WORK:worked', 'NODEDUCT:OFF/AL/PH/TRN (no deduction)', 'MC:MC/HL', 'UPL:UPL', 'ABSENT:absent', 'NOTEMP:not employed', 'REVIEW:unknown code'].map((x) => { const [c, l] = x.split(':'); return `<span><span class="day ${c}" style="display:inline-block;width:14px;height:12px"></span> ${l}</span>`; }).join('')}</span></div>
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>Name on log</th><th>ID</th><th>Dept</th><th>Day 1 → ${dim}</th><th>MC</th><th>UPL</th><th>Absent</th><th>AL</th><th>OFF</th><th>Not emp.</th><th>HR total</th><th>Match to master</th><th>Notes</th></tr></thead>
+        <thead><tr><th>Name</th><th>ID</th><th>Dept</th><th>Day 1 → ${dim}</th><th>Worked</th><th>MC</th><th>UPL</th><th>Absent</th><th>AL</th><th>OFF</th><th>Late</th><th>Not emp.</th><th title="Circled total written by HR">HR total</th><th>Printed totals / notes</th></tr></thead>
         <tbody>${recs.map((r, i) => {
-          const s = E.summariseDays(r.days, state.settings, dim); const m = matches[i];
-          const sel = r.forceNew ? '__new' : (m.row ? m.row.id : '__new');
+          const s = E.summariseDays(r.days, state.settings, dim);
           return `<tr class="${s.allBlank ? 'excluded' : ''}">
-            <td><b>${esc(r.name)}</b>${s.allBlank ? ' <span class="tag">blank – skipped</span>' : ''}</td><td class="mono">${esc(r.employeeId)}</td><td class="small">${esc(r.department)}</td>
-            <td>${dayStrip(r.days)}</td><td class="num">${s.MC || ''}</td><td class="num">${s.UPL || ''}</td><td class="num">${s.ABSENT || ''}</td><td class="num">${s.AL || ''}</td><td class="num">${s.OFF || ''}</td><td class="num">${s.NOTEMP || ''}</td>
+            <td><input type="text" data-rec="${i}" data-rf="name" value="${esc(r.name)}" style="width:230px;font-weight:600">${s.allBlank ? ' <span class="tag">blank – not recorded</span>' : ''}</td>
+            <td><input type="text" data-rec="${i}" data-rf="employeeId" value="${esc(r.employeeId)}" style="width:80px" class="mono"></td><td class="small">${esc(r.department)}</td>
+            <td>${dayStrip(r.days)}</td><td class="num">${s.worked || ''}</td><td class="num">${s.MC || ''}</td><td class="num">${s.UPL || ''}</td><td class="num">${s.ABSENT || ''}</td><td class="num">${s.AL || ''}</td><td class="num">${s.OFF || ''}</td><td class="num">${s.late || ''}</td><td class="num">${s.NOTEMP || ''}</td>
             <td class="center">${esc(r.handwrittenTotal || '')}</td>
-            <td class="keep"><select data-match="${i}" style="max-width:240px"><option value="__new">— new / not in master —</option>${opts.replace(`value="${sel}"`, `value="${sel}" selected`)}</select>
-              ${m.row && m.score < 1 && !r.forceRowId ? '<span class="tag">check</span>' : ''}</td>
-            <td class="small">${esc(r.notes || '')}</td></tr>`;
+            <td class="small">${esc([r.printedTotals, r.notes].filter(Boolean).join(' · '))}</td></tr>`;
         }).join('')}</tbody></table></div>
-      <div class="row" style="margin-top:12px"><button class="btn primary" data-act="applyAtt">Apply to ${esc(o.sheetName)} →</button>
-        <span class="small muted">Staff with blank attendance are not recorded. Staff not on the log (except HQ management / helpers) are excluded. You can change anything afterwards.</span></div>
+      <div class="row" style="margin-top:12px"><button class="btn primary" data-act="go" data-step="2">Next: choose outlet &amp; entitlement →</button>
+        <span class="small muted">You can fix names / IDs here. Day codes can be changed later per staff in Review.</span></div>
     </section>`;
+  }
+
+  // ------------------------------------------------------------------ step 2: outlet & entitlement
+  const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  function monthYearPicker(prefix, ym, label) {
+    const [y, m] = (ym || '').split('-').map(Number);
+    return `<label class="field">${label}<div class="row" style="gap:6px"><select data-my="${prefix}" data-part="m">${MONTH_NAMES.map((n, i) => `<option value="${i + 1}" ${m === i + 1 ? 'selected' : ''}>${i + 1} – ${n}</option>`).join('')}</select>
+      <input type="number" data-my="${prefix}" data-part="y" value="${y || new Date().getFullYear()}" style="width:90px" aria-label="${label} year"></div></label>`;
+  }
+  function viewOutlets() {
+    const a = state.ui.att; const s = state.settings; const ws = state.ws;
+    const g = state.ui.asg || (state.ui.asg = defaultAssignment());
+    const def = s.outlets.find((x) => x.name === g.outlet);
+    const existing = ws && ws.outlets.find((o) => o.sheetName === g.outlet);
+    const recs = a.records;
+    const withData = recs ? recs.filter((r) => !E.summariseDays(r.days, s, a.dim || 31).allBlank).length : 0;
+    const assign = recs && a.assignedTo && !state.ui.reassign ? `<section class="card"><div class="row"><span>✓ <b>${esc(a.fileName)}</b> was used for <b>${esc(a.assignedTo)}</b>.</span>
+        <button class="btn sm" data-act="reassign">Use it for a different outlet / redo</button><button class="btn sm primary" data-act="go" data-step="1">Scan the next outlet's attendance</button></div></section>` : recs ? `
+      <section class="card">
+        <div class="card-head"><h2>2. Which outlet is this attendance for?</h2><span class="small muted">${esc(a.fileName)} · ${withData} staff with attendance${a.meta && a.meta.company ? ' · ' + esc(a.meta.company) : ''}</span></div>
+        <div class="grid2">
+          <div class="stack">
+            <fieldset class="outlet-pick"><legend>Outlet</legend>
+              ${s.outlets.map((x) => { const done = ws && ws.outlets.some((o) => o.sheetName === x.name); return `<label class="check"><input type="radio" name="asgOutlet" value="${esc(x.name)}" ${x.name === g.outlet ? 'checked' : ''}> ${esc(x.name)}${done ? ' <span class="tag ok">done</span>' : ''}</label>`; }).join('')}
+              <button class="btn sm" data-act="newOutlet" type="button">+ New outlet</button></fieldset>
+            ${def && def.kind === 'central' ? '<p class="small muted">Central Kitchen is paid from the other outlets\' CK/HQ % — set the amounts in Review if those outlets are not in this month\'s files.</p>' : ''}
+            <div class="row">${monthYearPicker('pay', g.payMonth, 'Service charge / incentive month (Excel title)')}</div>
+            <div class="row">${monthYearPicker('att', g.attMonth, 'Attendance month')}<label class="field">Days<input type="number" min="28" max="31" id="asgDays" value="${g.days}" style="width:70px"></label></div>
+          </div>
+          <div class="stack">
+            <b>Entitlement</b>
+            <label class="check"><input type="checkbox" data-asg="sc" ${g.sc ? 'checked' : ''}> Service charge</label>
+            <label class="check"><input type="checkbox" data-asg="inc" ${g.inc ? 'checked' : ''}> Incentive <span class="small muted">(only when the outlet achieved its target)</span></label>
+            ${g.sc && !(def && def.kind === 'central') ? `<label class="field">Total service charge collected (RM)<input type="number" step="0.01" data-asg="scCollected" value="${g.scCollected || ''}" placeholder="e.g. 70146.18"></label>` : ''}
+            ${g.inc ? `<div class="row"><label class="field">Total net sales (RM)<input type="number" step="0.01" data-asg="netSales" value="${g.netSales || ''}"></label>
+              <label class="field">Incentive % of net sales<input type="number" step="0.01" data-asg="incPct" value="${E.xlRound(g.incPct * 100, 4)}" style="width:100px"></label></div>` : ''}
+            <p class="small muted">You can change all of these later in Review.</p>
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn primary" data-act="createOutlet" ${g.sc || g.inc ? '' : 'disabled'}>${existing ? `Replace ${esc(g.outlet)} staff list →` : `Create ${esc(g.outlet)} ${g.sc && g.inc ? 'service charge + incentive' : g.inc ? 'incentive' : 'service charge'} →`}</button>
+          <span class="small muted">Staff and attendance come straight from the scan. Positions / join dates you type are remembered for next month.</span>
+        </div>
+      </section>` : `<section class="card"><h2>2. Outlet &amp; entitlement</h2><p class="muted">Upload and read an attendance file first.</p><button class="btn primary" data-act="go" data-step="1">Go to step 1</button></section>`;
+    const list = ws && ws.outlets.length ? `
+      <section class="card">
+        <div class="card-head"><h2>Outlets in this month's files</h2><span class="small muted">Scan another attendance file to add the next outlet.</span></div>
+        <div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>Export</th><th>Outlet</th><th>Staff</th><th>Service charge</th><th>Incentive</th><th>SC collected (RM)</th><th>Net sales (RM)</th><th>Incentive %</th><th>1 service point</th><th>1 incentive point</th><th></th></tr></thead>
+          <tbody>${ws.outlets.map((o) => { const r = state.results && state.results[o.id] || {};
+            return `<tr><td class="center"><input type="checkbox" data-o="${o.id}" data-of="export" ${o.export !== false ? 'checked' : ''} aria-label="Export ${esc(o.sheetName)}"></td>
+              <td><b>${esc(o.sheetName)}</b><div class="small muted">${esc(o.company || '')}${o.attendance ? ' · ' + esc(o.attendance.file || '') : ''}</div></td>
+              <td class="num">${o.employees.filter((e) => e.include !== false).length}</td>
+              <td class="center"><input type="checkbox" data-o="${o.id}" data-of="scEnabled" ${o.scEnabled !== false ? 'checked' : ''} aria-label="Service charge"></td>
+              <td class="center"><input type="checkbox" data-o="${o.id}" data-of="incEnabled" ${o.incEnabled ? 'checked' : ''} aria-label="Incentive"></td>
+              <td>${o.kind === 'central' ? '<span class="small muted">other outlets\' CK %</span>' : `<input type="number" step="0.01" data-o="${o.id}" data-of="scCollected" value="${o.scCollected || 0}" style="width:120px">`}</td>
+              <td>${o.incEnabled ? `<input type="number" step="0.01" data-o="${o.id}" data-of="netSales" value="${o.netSales || 0}" style="width:120px">` : '<span class="muted small">—</span>'}</td>
+              <td>${o.incEnabled ? `<input type="number" step="0.01" data-o="${o.id}" data-of="incPct" data-pct value="${E.xlRound(E.num(o.incPct, s.inc.pct) * 100, 4)}" style="width:80px">` : ''}</td>
+              <td class="num">${r.sc ? rm(r.sc.summary.PointValue) : ''}</td><td class="num">${r.inc ? rm(r.inc.summary.PointValue) : ''}</td>
+              <td class="nowrap"><button class="btn sm" data-act="openOutlet" data-id="${o.id}">Review →</button> <button class="btn sm danger" data-act="removeOutlet" data-id="${o.id}" aria-label="Remove ${esc(o.sheetName)}">✕</button></td></tr>`; }).join('')}</tbody></table></div>
+      </section>` : '';
+    return assign + list;
+  }
+
+  function defaultAssignment() {
+    const a = state.ui.att; const s = state.settings; const m = a.meta || {};
+    let att = (m.periodStart || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(att)) att = state.ws ? state.ws.attendanceMonth : shiftMonth(newWorkspace().month, -1);
+    const pay = state.ws && state.ws.outlets.length ? state.ws.month : shiftMonth(att, 1);
+    return { outlet: suggestOutlet(), payMonth: pay, attMonth: att, days: a.dim || E.daysInMonth(att), sc: true, inc: false, scCollected: '', netSales: '', incPct: s.inc.pct };
+  }
+  // Suggest the outlet: staff remembered from earlier months vote for their outlet; else match the company name.
+  function suggestOutlet() {
+    const a = state.ui.att; const s = state.settings; const votes = {};
+    (a.records || []).forEach((r) => { const p = E.lookupDirectory(state.dir, r); if (p && p.outlet) votes[p.outlet] = (votes[p.outlet] || 0) + 1; });
+    const best = Object.entries(votes).sort((x, y) => y[1] - x[1])[0];
+    if (best) return best[0];
+    const comp = String((a.meta || {}).company || '').toUpperCase();
+    const byCompany = s.outlets.filter((x) => comp && x.company && comp.includes(x.company.split(' ')[0]));
+    if (byCompany.length === 1) return byCompany[0].name;
+    // otherwise keep the outlet chosen last time (HR usually scans outlets in the same order) or the first one
+    return state.ui.lastOutlet && s.outlets.some((x) => x.name === state.ui.lastOutlet) ? state.ui.lastOutlet : s.outlets[0].name;
   }
 
   // ------------------------------------------------------------------ step 3: review grid
@@ -2318,7 +2138,7 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
 
   function viewReview() {
     const o = ensureOutlet();
-    if (!o) return `<section class="card"><h2>3. Review</h2><p>No outlets yet. Import last month's workbook in step 1.</p></section>`;
+    if (!o) return `<section class="card"><h2>3. Review</h2><p>No outlets yet. Upload and read an attendance file (step 1), then choose the outlet (step 2).</p><button class="btn primary" data-act="go" data-step="1">Go to step 1</button></section>`;
     const scheme = state.ui.scheme === 'inc' && o.incEnabled ? 'inc' : 'sc';
     if (scheme === 'sc' && o.scEnabled === false) state.ui.scheme = 'inc';
     const res = state.results[o.id][scheme];
@@ -2334,6 +2154,7 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
       <span class="spacer" style="flex:1"></span>
       <button class="btn" data-act="aiReview">✨ AI review &amp; summary</button>
       <button class="btn" data-act="addRow">+ Add staff</button>
+      <button class="btn" data-act="addRow" data-mgmt="1" title="HQ management are not on the outlet's attendance; once added they are remembered every month">+ Add HQ management</button>
       <button class="btn primary" data-act="go" data-step="4">Export →</button>
     </div>
     ${summaryCards(o, scheme, S, T)}
@@ -2370,6 +2191,7 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
       if (S.CompanyTopUp > 0.005) html += card('Company top-up to minimum', rm(S.CompanyTopUp), 'companyTopUp');
     } else {
       html += inputCard('Total net sales (RM)', 'netSales', o.netSales);
+      html += `<div class="kpi hl"><div class="k">Incentive % of net sales</div><input type="number" step="0.01" data-o="${o.id}" data-of="incPct" data-pct value="${E.xlRound(E.num(o.incPct, state.settings.inc.pct) * 100, 4)}"></div>`;
       html += card(`Incentive ${E.xlRound((o.incPct || state.settings.inc.pct) * 100, 2)}%`, rm(S.IncentiveTotal), 'incentiveTotal');
       html += card('Total points (sum of K)', n2(S.TotalPoints), null);
       html += card('1 Incentive point', rm(S.PointValue), 'incPointValue', 'hl');
@@ -2572,7 +2394,6 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
   function viewExport() {
     const ws = state.ws;
     if (!ws || !ws.outlets.length) return `<section class="card"><h2>4. Export</h2><p>Nothing to export yet.</p></section>`;
-    const sel = state.ui.exportSel || (state.ui.exportSel = Object.fromEntries(ws.outlets.map((o) => [o.id, true])));
     const rows = ws.outlets.map((o) => {
       const r = state.results[o.id];
       const inc = o.employees.filter((e) => e.include !== false);
@@ -2584,7 +2405,7 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
       if (flags) issues.push(`${flags} staff with notes`);
       if (noJoin) issues.push(`${noJoin} without join date`);
       if (r.sc && Math.abs(r.sc.totals.variance) > 1) issues.push(`SC difference RM ${rm(r.sc.totals.variance)}`);
-      return `<tr><td class="center"><input type="checkbox" data-exp="${o.id}" ${sel[o.id] ? 'checked' : ''} aria-label="Export ${esc(o.sheetName)}"></td><td><b>${esc(o.sheetName)}</b></td><td class="num">${inc.length}</td>
+      return `<tr><td class="center"><input type="checkbox" data-o="${o.id}" data-of="export" ${o.export !== false ? 'checked' : ''} aria-label="Export ${esc(o.sheetName)}"></td><td><b>${esc(o.sheetName)}</b><div class="small muted">${[o.scEnabled !== false ? 'Service charge' : '', o.incEnabled ? 'Incentive' : ''].filter(Boolean).join(' + ')}</div></td><td class="num">${inc.length}</td>
         <td class="num">${r.sc ? rm(r.sc.summary.PointValue) : '—'}</td><td class="num">${r.inc ? rm(r.inc.summary.PointValue) : '—'}</td>
         <td>${issues.length ? issues.map((i) => `<span class="tag bad">${esc(i)}</span>`).join(' ') : '<span class="tag ok">ready</span>'}</td></tr>`;
     }).join('');
@@ -2594,15 +2415,19 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Export</th><th>Outlet tab</th><th>Staff included</th><th>1 service point</th><th>1 incentive point</th><th>Checks</th></tr></thead><tbody>${rows}</tbody></table></div>
       <div class="row" style="margin-top:14px">
         <button class="btn primary" data-act="export" data-s="sc">⬇ Service Charge - ${esc(mm)}.xlsx</button>
-        <button class="btn primary" data-act="export" data-s="inc" ${ws.outlets.some((o) => o.incEnabled) ? '' : 'disabled title="Turn on incentive for an outlet first"'}>⬇ Incentive - ${esc(mm)}.xlsx</button>
+        ${ws.outlets.some((o) => o.incEnabled) ? `<button class="btn primary" data-act="export" data-s="inc">⬇ Incentive - ${esc(mm)}.xlsx</button>` : '<span class="small muted">No outlet has incentive ticked — only the service charge file is produced.</span>'}
       </div>
       <p class="small muted" style="margin-top:10px">Each outlet becomes one tab in the stakeholder layout. All calculated cells are live Excel formulas (points, amounts, totals, point value), the yellow cells are the inputs,
       and "Precision as displayed" is switched on like in the stakeholder file so Excel gives exactly the numbers shown here. Grey "Check" columns on the right should read TRUE / 0.</p>
-    </section>`;
+    </section>
+    <section class="card"><div class="card-head"><h3>This month's work</h3></div>
+      <div class="row"><button class="btn" data-act="saveBackup">Save backup (.json)</button><label class="btn">Load backup<input type="file" id="backupInput" accept=".json" hidden></label>
+        <button class="btn danger" data-act="resetWs">Start a new month (clear outlets)</button></div>
+      <p class="small muted">Everything stays in this browser. Positions, join dates and points you typed are remembered for next month (Settings → Outlets &amp; staff memory).</p></section>`;
   }
 
   async function doExport(scheme) {
-    const ws = state.ws; const ids = ws.outlets.filter((o) => state.ui.exportSel[o.id]).map((o) => o.id);
+    const ws = state.ws; const ids = ws.outlets.filter((o) => o.export !== false && (scheme === 'sc' ? o.scEnabled !== false : o.incEnabled)).map((o) => o.id);
     if (!ids.length) { toast('Tick at least one outlet.'); return; }
     try {
       const wb = X.exportWorkbook(ws, scheme, state.settings, ExcelJS, { outletIds: ids, results: state.results });
@@ -2624,7 +2449,7 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
 
   function renderSettings() {
     const s = state.settings; const t = state.ui.settingsTab;
-    const tabs = [['ai', 'AI'], ['rules', 'Rules'], ['codes', 'Leave codes'], ['formulas', 'Formulas'], ['look', 'Colours & sign-off'], ['help', 'Help']];
+    const tabs = [['ai', 'AI'], ['outlets', 'Outlets & staff memory'], ['rules', 'Rules'], ['codes', 'Leave codes'], ['formulas', 'Formulas'], ['look', 'Colours & sign-off'], ['help', 'Help']];
     let body = '';
     if (t === 'ai') {
       const p = AI.PROVIDERS[s.ai.provider] || AI.PROVIDERS.gemini;
@@ -2695,6 +2520,17 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
         <div class="stack"><h3>Sign-off block</h3>${s.signatories.map((sg, i) => `<div class="row"><input type="text" data-sig="${i}" data-sf="role" value="${esc(sg.role)}" style="width:110px"><input type="text" data-sig="${i}" data-sf="name" value="${esc(sg.name)}" style="width:150px"><input type="text" data-sig="${i}" data-sf="position" value="${esc(sg.position)}" style="width:90px"></div>`).join('')}
         <h3>Terms & conditions (one per line)</h3><textarea data-terms style="min-height:140px">${esc(s.terms.join('\n'))}</textarea></div></div>
         <div class="row" style="margin-top:12px"><button class="btn" data-act="exportSettings">Export settings (.json)</button><label class="btn">Import settings<input type="file" id="settingsInput" accept=".json" hidden></label><button class="btn danger" data-act="resetSettings">Reset all settings</button></div>`;
+    } else if (t === 'outlets') {
+      const dirN = Object.keys(state.dir).length;
+      body = `<p class="muted">Outlets you can assign an attendance file to. Company and title go into the Excel heading ("COMPANY - GRANDMAMA'S RESTAURANT - TITLE"); the code appears in "Details - GMM CODE".</p>
+        <div class="tbl-wrap" style="max-height:none"><table class="tbl"><thead><tr><th>Tab name</th><th>Company</th><th>Title in Excel</th><th>Code</th><th>Central kitchen</th><th>Tab colour</th><th></th></tr></thead><tbody>
+        ${s.outlets.map((x, i) => `<tr>${['name', 'company', 'title', 'code'].map((k) => `<td><input type="text" data-od="${i}" data-odf="${k}" value="${esc(x[k] || '')}" style="width:${k === 'company' ? 210 : 150}px"></td>`).join('')}
+          <td class="center"><input type="checkbox" data-od="${i}" data-odf="central" ${x.kind === 'central' ? 'checked' : ''} aria-label="Central kitchen"></td>
+          <td><input type="color" data-od="${i}" data-odf="tab" value="#${(x.tab || 'FF92D050').slice(-6)}"></td><td><button class="btn sm danger" data-act="delOutletDef" data-i="${i}">✕</button></td></tr>`).join('')}
+        </tbody></table></div><button class="btn sm" data-act="addOutletDef" style="margin-top:8px">+ Add outlet</button>
+        <h3 style="margin-top:16px">Staff memory</h3>
+        <p class="muted small">${dirN} staff remembered. When the same person appears on a future attendance file, their position, join date, status, category, points and outlet are filled in automatically. HQ management rows added to an outlet are re-added every month.</p>
+        <button class="btn sm danger" data-act="clearDir">Forget remembered staff</button>`;
     } else body = helpHtml();
     $('#modal').innerHTML = `<div class="mh"><h2>Settings</h2><span style="flex:1"></span><button class="btn" data-act="closeSettings" aria-label="Close">✕</button></div>
       <div class="mb"><div class="tabs">${tabs.map(([k, l]) => `<button class="tab ${t === k ? 'active' : ''}" data-act="settingsTab" data-tab="${k}">${l}</button>`).join('')}</div>${body}</div>`;
@@ -2715,9 +2551,8 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
     return `<div class="stack">
       <h3>How the tool works</h3>
       <ol>
-        <li><b>Import last month's files</b> (Service Charge and Incentive .xlsx). They become the employee master: department, position, join date, status, point entitlement, colours, fixed-SC helpers.</li>
-        <li><b>Upload the scanned attendance log</b> (ATSB PDF). The AI reads each page: punch times and HR's handwritten codes (OFF, AL, PH, MC, HL, UPL…), notes and circled totals. You can add "external circumstances" for the AI.</li>
-        <li><b>Check the AI reading</b>, fix any matches, then apply it to the outlet. Staff with blank attendance are not recorded.</li>
+        <li><b>Attendance</b>: upload the scanned attendance (List of Logs or Daily Time Record). The AI reads each page: punches, printed status, HR's handwritten codes (OFF, AL, PH, MC, TRN, UPL…), notes and circled totals. You can add "external circumstances" for the AI.</li>
+        <li><b>Outlet &amp; entitlement</b>: pick the outlet, the month and year, and tick Service charge and/or Incentive (only when the outlet hit its target). The staff list is created from the attendance — no previous Excel needed. Staff with blank attendance are not recorded.</li>
         <li><b>Review</b>: every number can be edited. Click <span class="qbtn" style="display:inline-block">?</span> to see a formula with this row's numbers. Typed numbers turn yellow and override the formula.</li>
         <li><b>Export</b> the Service Charge and Incentive workbooks with live Excel formulas.</li>
       </ol>
@@ -2733,18 +2568,6 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
   }
 
   // ------------------------------------------------------------------ actions
-  async function importXlsx(files) {
-    try {
-      const list = await Promise.all([...files].map(async (f) => ({ name: f.name, buffer: await f.arrayBuffer() })));
-      const res = await I.importWorkbooks(list, ExcelJS);
-      if (!res.outlets.length) { toast('No outlet tab with an "Employee No" header was found.'); return; }
-      const month = res.month || newWorkspace().month;
-      state.ws = { month, attendanceMonth: shiftMonth(month, -1), daysInMonth: res.daysInMonth, outlets: res.outlets, importNotes: res.notes };
-      state.ui.outletId = res.outlets[0].id;
-      saveWorkspace(); render(); toast(`Imported ${res.outlets.length} outlet tab(s).`);
-    } catch (e) { console.error(e); toast('Could not read the workbook: ' + e.message, 6000); }
-  }
-
   async function loadAttendanceFiles(files) {
     const a = state.ui.att; a.error = null; a.records = null; a.pageResults = null;
     a.fileName = [...files].map((f) => f.name).join(', ');
@@ -2769,35 +2592,49 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
     a.error = null; a.busy = true; a.abort = new AbortController();
     a.progress = { done: 0, total: a.pages.length, text: 'Starting…' }; render();
     try {
-      const pr = await AI.extractPages(a.pages, s, state.ws.daysInMonth, (p) => {
+      const pr = await AI.extractPages(a.pages, s, 31, (p) => {
         a.progress = { done: p.status === 'done' ? p.page : p.page - 1, total: p.pages, text: p.status === 'done' ? `Page ${p.page}/${p.pages}: ${p.count} staff (${p.model})` : p.status === 'fallback' ? p.text : `Reading page ${p.page} of ${p.pages} with ${AI.currentLabel(s.ai)}…` };
         if (p.status === 'fallback') toast(p.text, 8000);
         const bar = $('.progress > div'); if (bar) { bar.style.width = Math.round(a.progress.done / a.progress.total * 100) + '%'; $('.progress + p').textContent = a.progress.text; }
       }, a.abort.signal);
       if (s.ai._resolvedNote) { toast(s.ai._resolvedNote, 8000); delete s.ai._resolvedNote; saveSettings(); }
-      a.pageResults = pr; a.records = AI.mergePages(pr, state.ws.daysInMonth);
-      autoPickOutlet();
+      setScan(pr);
       a.progress = { done: 1, total: 1, text: `Done — ${a.records.length} staff read from ${pr.length} page(s) with ${pr.modelUsed}${pr.fallbackUsed ? ` (fallback ${pr.fallbackUsed} used)` : ''}.` };
       a.modelUsed = pr.modelUsed;
     } catch (e) { a.error = e.name === 'AbortError' ? 'Cancelled.' : e.message; a.progress = null; }
     a.busy = false; render();
   }
-  function autoPickOutlet() {
-    const a = state.ui.att; if (!a.records) return;
-    let best = null, bestN = -1;
-    for (const o of state.ws.outlets) { const n = E.matchAttendance(a.records, o.employees).filter((m) => m.row).length; if (n > bestN) { best = o; bestN = n; } }
-    if (best) a.outletId = best.id;
+  function createOutletFromScan() {
+    const a = state.ui.att; const s = state.settings; const g = state.ui.asg;
+    const ws = ensureWs();
+    if (ws.outlets.length && ws.attendanceMonth !== g.attMonth && !confirm(`The outlets already in this month's files use attendance ${monthLabel(ws.attendanceMonth)}. Switch everything to ${monthLabel(g.attMonth)}?`)) return;
+    ws.month = g.payMonth; ws.attendanceMonth = g.attMonth; ws.daysInMonth = Number(g.days) || E.daysInMonth(g.attMonth);
+    const def = s.outlets.find((x) => x.name === g.outlet) || { name: g.outlet, company: (a.meta && a.meta.company) || '', title: g.outlet.toUpperCase(), code: g.outlet.toUpperCase(), kind: 'outlet', tab: 'FF92D050' };
+    let o = ws.outlets.find((x) => x.sheetName === def.name);
+    if (o && !confirm(`${def.name} already has a staff list this month. Replace it with this attendance file?`)) return;
+    if (!o) { o = { id: 'o' + Date.now().toString(36), fixedRows: [] }; ws.outlets.push(o); }
+    Object.assign(o, { sheetName: def.name, company: def.company || (a.meta && a.meta.company) || '', brand: "GRANDMAMA'S RESTAURANT", outletTitle: def.title || def.name.toUpperCase(), code: def.code || def.name.toUpperCase(),
+      kind: def.kind || 'outlet', tabColor: def.tab || 'FF92D050', scEnabled: !!g.sc, incEnabled: !!g.inc, scCollected: Number(g.scCollected) || 0, netSales: Number(g.netSales) || 0, incPct: g.incPct, export: true, aiReview: null });
+    if (o.kind === 'central') o.ckSources = s.outlets.filter((x) => x.kind !== 'central').map((x) => ({ outlet: x.name, amount: 0 }));
+    const recs = a.records.map((r) => ({ ...r, days: AI.normaliseDays(r.days, ws.daysInMonth) }));
+    const rep = E.buildOutletFromAttendance(o, recs, s, ws.daysInMonth, state.dir, ws.attendanceMonth);
+    o.attendance = { file: a.fileName, appliedAt: new Date().toISOString(), report: rep, model: a.modelUsed || '' };
+    state.ui.outletId = o.id; state.ui.scheme = o.scEnabled ? 'sc' : 'inc'; state.ui.asg = null; state.ui.lastOutlet = o.sheetName; a.assignedTo = o.sheetName; state.ui.reassign = false;
+    saveWorkspace();
+    toast(`${o.sheetName}: ${o.employees.filter((e) => e.include !== false).length} staff created${rep.blank.length ? `, ${rep.blank.length} with blank attendance not recorded` : ''}.`, 6000);
+    go(3);
   }
 
-  function applyAttendanceNow() {
-    const a = state.ui.att; const o = outlet(a.outletId) || ensureOutlet();
-    const recs = a.records.map((r) => ({ ...r }));
-    const rep = E.applyAttendance(o, recs, state.settings, state.ws.daysInMonth);
-    o.attendance = { file: a.fileName, appliedAt: new Date().toISOString(), report: rep };
-    state.ui.outletId = o.id; state.ui.scheme = o.scEnabled === false ? 'inc' : 'sc';
-    saveWorkspace();
-    toast(`${o.sheetName}: ${rep.matched.length} matched, ${rep.added.length} not in master (excluded until you tick them), ${rep.blank.length} blank, ${rep.missing.length} not on the log.`, 7000);
-    go(3);
+  // After the AI (or a saved extraction): work out the period / days from the report itself.
+  function setScan(pr) {
+    const a = state.ui.att;
+    a.pageResults = pr; a.meta = AI.reportMeta(pr);
+    const end = /^(\d{4})-(\d{2})-(\d{2})$/.exec(a.meta.periodEnd || '');
+    const start = /^(\d{4})-(\d{2})/.exec(a.meta.periodStart || '');
+    const lens = pr.flatMap((p) => (p.employees || []).map((e) => (e.days || []).length)).filter((n) => n >= 28 && n <= 31);
+    a.dim = end ? Number(end[3]) : start ? E.daysInMonth(`${start[1]}-${start[2]}`) : (lens.sort((x, y) => lens.filter((v) => v === y).length - lens.filter((v) => v === x).length)[0] || 31);
+    a.records = AI.mergePages(pr, a.dim);
+    state.ui.asg = null; a.assignedTo = null;
   }
 
   async function runReview() {
@@ -2836,7 +2673,6 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
     }
     if (!ev.target.closest('#popover')) closePopover();
     const t = ev.target.closest('[data-act]'); if (!t) {
-      if (ev.target.closest('#xlsxDrop')) $('#xlsxInput').click();
       if (ev.target.closest('#attDrop')) $('#attInput').click();
       if (ev.target.closest('.step')) go(Number(ev.target.closest('.step').dataset.step));
       return;
@@ -2848,13 +2684,13 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
       case 'closeSettings': saveSettings(); closeSettings(); break;
       case 'settingsTab': state.ui.settingsTab = t.dataset.tab; renderSettings(); break;
       case 'help': openSettings('help'); break;
-      case 'blankWs': state.ws = newWorkspace(); saveWorkspace(); render(); break;
       case 'openOutlet': state.ui.outletId = t.dataset.id; go(3); break;
       case 'scheme': state.ui.scheme = t.dataset.s; render(); break;
       case 'enableInc': o.incEnabled = true; state.ui.scheme = 'inc'; saveWorkspace(); render(); toast('Incentive turned on — enter the net sales.'); break;
       case 'openRow': state.ui.drawerRow = t.dataset.id; renderDrawer(); break;
       case 'closeDrawer': state.ui.drawerRow = null; $('#drawer').classList.remove('open'); break;
-      case 'addRow': { const r = { id: 'r' + Date.now().toString(36), dept: '', empNo: '', name: 'NEW STAFF', position: '', joinDate: '', status: 'PERMANENT', category: 'PERM', base: 1, mc: 0, upl: 0, absent: 0, lateDays: 0, notEmployed: 0, overrides: {}, incOverrides: {}, include: true, isNew: true, flags: ['Added manually'] };
+      case 'addRow': { const mg = !!t.dataset.mgmt; const r = { id: 'r' + Date.now().toString(36), dept: mg ? 'SERVICE' : '', empNo: '', name: mg ? 'HQ MANAGER' : 'NEW STAFF', position: '', joinDate: '', status: 'PERMANENT', category: mg ? 'MGMT' : 'PERM', base: 1, mc: 0, upl: 0, absent: 0, lateDays: 0, notEmployed: 0, overrides: {}, incOverrides: {}, include: true, isNew: !mg, keepWithoutAttendance: mg, inIncentive: !mg, flags: mg ? [] : ['Added manually'] };
+        if (mg) { const i = o.employees.findIndex((e) => e.category !== 'MGMT'); o.employees.splice(i < 0 ? o.employees.length : i, 0, r); } else
         o.employees.push(r); state.ui.drawerRow = r.id; saveWorkspace(); render(); break; }
       case 'delRow': if (confirm('Remove this staff member from the outlet?')) { o.employees = o.employees.filter((e) => e.id !== t.dataset.id); state.ui.drawerRow = null; $('#drawer').classList.remove('open'); saveWorkspace(); render(); } break;
       case 'recount': { const r = o.employees.find((e) => e.id === t.dataset.id); const s = E.summariseDays(r.attendance.days, state.settings, state.ws.daysInMonth);
@@ -2866,21 +2702,18 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
       case 'applySug': applySuggestion(Number(t.dataset.i)); break;
       case 'extract': runExtraction(); break;
       case 'cancelExtract': state.ui.att.abort && state.ui.att.abort.abort(); break;
-      case 'saveExtract': download(new Blob([JSON.stringify({ file: state.ui.att.fileName, month: state.ws.attendanceMonth, daysInMonth: state.ws.daysInMonth, pages: state.ui.att.pageResults }, null, 1)], { type: 'application/json' }), `attendance-extraction-${state.ws.attendanceMonth}.json`); break;
-      case 'applyAtt': applyAttendanceNow(); break;
+      case 'saveExtract': { const a = state.ui.att; download(new Blob([JSON.stringify({ file: a.fileName, meta: a.meta, daysInMonth: a.dim, pages: a.pageResults }, null, 1)], { type: 'application/json' }), `attendance-extraction-${(a.fileName || 'scan').replace(/\.[a-z]+$/i, '')}.json`); break; }
       case 'zoomPage': { const p = state.ui.att.pages[Number(t.dataset.i)]; const w = window.open(); if (w) w.document.write(`<title>Page ${p.n}</title><img src="${p.dataUrl}" style="width:100%">`); break; }
       case 'export': doExport(t.dataset.s); break;
       case 'saveBackup': download(new Blob([JSON.stringify({ workspace: state.ws, settings: { ...state.settings, ai: stripKeys(state.settings.ai) } }, null, 1)], { type: 'application/json' }), `gmm-workspace-${state.ws.month}.json`); break;
-      case 'resetWs': if (confirm('Clear all imported data from this browser? (Settings are kept.)')) { state.ws = null; store.del('gmm.workspace'); render(); } break;
-      case 'addOutlet': state.ws.outlets.push({ id: 'o' + Date.now().toString(36), sheetName: 'New outlet', company: '', code: '', employees: [], fixedRows: [], scCollected: 0, netSales: 0, scEnabled: true, incEnabled: false, kind: 'outlet' }); saveWorkspace(); render(); break;
-      case 'rollMonth': if (confirm('Start the next month? MC/UPL/absent, exit status, appeals, remarks and typed overrides will be cleared for all staff; resigned/absconded staff are excluded.')) {
-        const ws = state.ws; ws.month = shiftMonth(ws.month, 1); ws.attendanceMonth = shiftMonth(ws.attendanceMonth, 1); ws.daysInMonth = E.daysInMonth(ws.attendanceMonth);
-        ws.outlets.forEach((x) => { x.aiReview = null; x.attendance = null; x.fixedRows = []; x.employees.forEach((r) => {
-          if (r.exitType === 'MIA' || r.exitType === 'ROLLBACK' || r.exitType === 'RESIGN_FULL' || (r.resignDate && r.resignDate < `${ws.attendanceMonth}-01`)) r.include = false;
-          Object.assign(r, { mc: 0, upl: 0, absent: 0, lateDays: 0, notEmployed: 0, exitType: '', incExitType: undefined, waiveTier: false, incWaiveTier: undefined, extraRemark: '', remarkOverride: '', overrides: {}, incOverrides: {}, incNotEmployed: undefined, isNew: false, flags: [], attendance: null, template: null, incTemplate: null });
-        }); });
-        saveWorkspace(); render(); toast(`Now preparing ${monthLabel(ws.month)} (attendance ${monthLabel(ws.attendanceMonth)}).`); }
-        break;
+      case 'resetWs': if (confirm('Start a new month? All outlets in this month\'s files are cleared from this browser (settings and remembered staff details are kept).')) { state.ws = null; store.del('gmm.workspace'); state.ui.outletId = null; go(1); } break;
+      case 'createOutlet': createOutletFromScan(); break;
+      case 'reassign': state.ui.reassign = true; state.ui.asg = null; render(); break;
+      case 'newOutlet': { const n = prompt('Name of the new outlet (tab name in Excel):'); if (n && n.trim()) { state.settings.outlets.push({ name: n.trim(), company: (state.ui.att.meta && state.ui.att.meta.company) || '', title: n.trim().toUpperCase(), code: n.trim().toUpperCase(), kind: 'outlet', tab: 'FF92D050' }); saveSettings(); state.ui.asg.outlet = n.trim(); render(); } break; }
+      case 'removeOutlet': if (confirm('Remove this outlet from this month\'s files?')) { state.ws.outlets = state.ws.outlets.filter((x) => x.id !== t.dataset.id); state.ui.outletId = null; saveWorkspace(); render(); } break;
+      case 'addOutletDef': state.settings.outlets.push({ name: 'New outlet', company: '', title: 'NEW OUTLET', code: 'NEW', kind: 'outlet', tab: 'FF92D050' }); saveSettings(); renderSettings(); break;
+      case 'delOutletDef': state.settings.outlets.splice(Number(t.dataset.i), 1); saveSettings(); renderSettings(); break;
+      case 'clearDir': if (confirm('Forget all remembered staff details (positions, join dates, points)?')) { state.dir = {}; store.set('gmm.directory', {}); renderSettings(); } break;
       case 'listModels': try { state.ui.models = await AI.listModels(state.settings); renderSettings(); toast(`${state.ui.models.length} models available.`); } catch (e) { toast(e.message, 6000); } break;
       case 'testAI': { $('#aiTest').textContent = 'Testing…'; try { await AI.callModel(state.settings, [{ text: 'Reply with JSON {"ok":true}' }], { maxTokens: 1024 }); const ai = state.settings.ai; const used = ai._resolvedModel || ai.model; delete ai._resolvedModel;
           const note = ai._resolvedNote; delete ai._resolvedNote; saveSettings(); renderSettings();
@@ -2899,22 +2732,27 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
 
   document.addEventListener('change', async (ev) => {
     const el = ev.target; const o = outlet();
-    if (el.id === 'xlsxInput') return importXlsx(el.files);
     if (el.id === 'attInput') return loadAttendanceFiles(el.files);
     if (el.id === 'outletSel') { state.ui.outletId = el.value; state.ui.drawerRow = null; $('#drawer').classList.remove('open'); return render(); }
-    if (el.id === 'attOutlet') { state.ui.att.outletId = el.value; return render(); }
+    if (el.name === 'asgOutlet') { state.ui.asg.outlet = el.value; return render(); }
+    if (el.dataset.asg) { const g = state.ui.asg; const k = el.dataset.asg; g[k] = el.type === 'checkbox' ? el.checked : k === 'incPct' ? Number(el.value) / 100 : el.value; return render(); }
+    if (el.dataset.my) { const g = state.ui.asg; const key = el.dataset.my === 'pay' ? 'payMonth' : 'attMonth'; const [y, m] = g[key].split('-'); const ny = el.dataset.part === 'y' ? el.value : y; const nm = el.dataset.part === 'm' ? String(el.value).padStart(2, '0') : m;
+      g[key] = `${ny}-${nm}`; if (key === 'attMonth') g.days = E.daysInMonth(g[key]); return render(); }
+    if (el.id === 'asgDays') { state.ui.asg.days = Number(el.value); return; }
+    if (el.dataset.rec !== undefined) { state.ui.att.records[Number(el.dataset.rec)][el.dataset.rf] = el.value.trim(); return; }
     if (el.id === 'rotSel') { state.ui.att.rotate = el.value; return renderAttendancePages(); }
     if (el.id === 'aiInstr') { state.settings.ai.instructions = el.value; return saveSettings(); }
     if (el.id === 'extractInput') {
-      try { const j = JSON.parse(await el.files[0].text()); const a = state.ui.att; a.pageResults = j.pages || j; a.records = AI.mergePages(a.pageResults, state.ws.daysInMonth); a.fileName = a.fileName || el.files[0].name; autoPickOutlet(); render(); toast(`Loaded ${a.records.length} staff from the saved extraction.`); } catch (e) { toast('Not a valid extraction file: ' + e.message); }
+      try { const j = JSON.parse(await el.files[0].text()); const a = state.ui.att; setScan(j.pages || j); a.fileName = a.fileName || j.file || el.files[0].name; render(); toast(`Loaded ${a.records.length} staff from the saved extraction.`); } catch (e) { toast('Not a valid extraction file: ' + e.message); }
       return;
     }
     if (el.id === 'backupInput') { try { const j = JSON.parse(await el.files[0].text()); state.ws = j.workspace || j; if (j.settings) { const keys = state.settings.ai.keys; state.settings = E.mergeSettings(j.settings); state.settings.ai.keys = keys; saveSettings(); } state.ui.outletId = null; saveWorkspace(); render(); toast('Backup loaded.'); } catch (e) { toast('Not a valid backup: ' + e.message); } return; }
     if (el.id === 'settingsInput') { try { const j = JSON.parse(await el.files[0].text()); const keys = state.settings.ai.keys; state.settings = E.mergeSettings(j); state.settings.ai.keys = keys; saveSettings(); renderSettings(); toast('Settings imported.'); } catch (e) { toast('Not a valid settings file.'); } return; }
     if (el.dataset.match !== undefined) { const r = state.ui.att.records[Number(el.dataset.match)]; if (el.value === '__new') { r.forceNew = true; delete r.forceRowId; } else { r.forceRowId = el.value; delete r.forceNew; } return render(); }
-    if (el.dataset.exp) { state.ui.exportSel[el.dataset.exp] = el.checked; return; }
     if (el.dataset.ws) { const ws = state.ws; ws[el.dataset.ws] = el.type === 'number' ? Number(el.value) : el.value; if (el.dataset.ws === 'attendanceMonth' && el.value) ws.daysInMonth = E.daysInMonth(el.value); saveWorkspace(); return render(); }
-    if (el.dataset.o) { const ox = outlet(el.dataset.o); const f = el.dataset.of; ox[f] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value; saveWorkspace(); return render(); }
+    if (el.dataset.o) { const ox = outlet(el.dataset.o); const f = el.dataset.of; ox[f] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) / (el.dataset.pct !== undefined ? 100 : 1) : el.value;
+      if (f === 'scEnabled' || f === 'incEnabled') { if (!ox.scEnabled && !ox.incEnabled) { ox[f] = true; toast('Tick at least service charge or incentive.'); } }
+      saveWorkspace(); return render(); }
     if (el.dataset.ck !== undefined) { o.ckSources[Number(el.dataset.ck)].amount = Number(el.value); saveWorkspace(); return render(); }
     if (el.dataset.fx !== undefined) { const f = o.fixedRows[Number(el.dataset.fx)]; f[el.dataset.ff] = el.type === 'number' ? Number(el.value) : el.value; saveWorkspace(); return render(); }
     if (el.dataset.day !== undefined) { const r = o.employees.find((e) => e.id === el.dataset.r); r.attendance.days[Number(el.dataset.day)].code = el.value; el.className = 'day ' + E.codeCategory(el.value, state.settings); saveWorkspace(); return; }
@@ -2938,6 +2776,8 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
     if (el.dataset.tier !== undefined) { const tr = state.settings.tiers[Number(el.dataset.tier)]; const f = el.dataset.tf; tr[f] = f === 'pct' ? Number(el.value) / 100 : el.type === 'number' ? Number(el.value) : el.value; saveSettings(); return; }
     if (el.dataset.code !== undefined) { const c = state.settings.codes[Number(el.dataset.code)]; c[el.dataset.cf] = el.dataset.cf === 'code' ? el.value.toUpperCase().trim() : el.value; saveSettings(); return; }
     if (el.dataset.formula) { state.settings.formulas[el.dataset.formula] = el.value.trim(); try { E.computeWorkspace(state.ws || { outlets: [], daysInMonth: 31 }, state.settings); saveSettings(); } catch (e) { toast('Formula error: ' + e.message, 6000); } return renderSettings(); }
+    if (el.dataset.od !== undefined) { const d = state.settings.outlets[Number(el.dataset.od)]; const f = el.dataset.odf;
+      if (f === 'central') d.kind = el.checked ? 'central' : 'outlet'; else if (f === 'tab') d.tab = 'FF' + el.value.slice(1).toUpperCase(); else d[f] = el.value; saveSettings(); return; }
     if (el.dataset.color) { state.settings.colors[el.dataset.color] = 'FF' + el.value.slice(1).toUpperCase(); saveSettings(); return; }
     if (el.dataset.sig !== undefined) { state.settings.signatories[Number(el.dataset.sig)][el.dataset.sf] = el.value; saveSettings(); return; }
     if (el.dataset.terms !== undefined) { state.settings.terms = el.value.split('\n').map((x) => x.trim()).filter(Boolean); saveSettings(); }
@@ -2948,7 +2788,7 @@ Only suggest a change when the data clearly supports it (e.g. handwritten total 
   document.addEventListener('dragleave', (ev) => { const z = ev.target.closest('.dropzone'); if (z) z.classList.remove('over'); });
   document.addEventListener('drop', (ev) => {
     const z = ev.target.closest('.dropzone'); if (!z) return; ev.preventDefault(); z.classList.remove('over');
-    if (z.id === 'xlsxDrop') importXlsx(ev.dataTransfer.files); else loadAttendanceFiles(ev.dataTransfer.files);
+    loadAttendanceFiles(ev.dataTransfer.files);
   });
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape') { closePopover(); if ($('#modalBg').classList.contains('open')) { saveSettings(); closeSettings(); } else if (state.ui.drawerRow) { state.ui.drawerRow = null; $('#drawer').classList.remove('open'); } }

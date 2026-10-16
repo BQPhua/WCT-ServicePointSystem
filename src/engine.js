@@ -265,9 +265,10 @@
     ['RL', 'NODEDUCT', 'Replacement leave'],
     ['EL', 'NODEDUCT', 'Emergency leave (paid)'],
     ['CL', 'NODEDUCT', 'Compassionate leave'],
-    ['PL', 'NODEDUCT', 'Paternity leave'],
+    ['PL', 'NODEDUCT', 'Paternity / paid leave'],
     ['MAT', 'NODEDUCT', 'Maternity leave'],
     ['TRAINING', 'NODEDUCT', 'Training / outstation'],
+    ['TRN', 'NODEDUCT', 'Training'],
     ['MC', 'MC', 'Medical certificate'],
     ['HL', 'MC', 'Hospitalisation leave'],
     ['HS', 'MC', 'Hospitalisation (HS/MC = MC category)'],
@@ -298,7 +299,18 @@
     lateGraceMinutes: 0,
     lateCountPerDay: 0, // 0 = lateness counted for information only; e.g. 3 = every 3 lates = 1 day deducted
     sc: { distributePct: 0.8, ckPct: 0.11, minMode: 'point', minValue: 450 },
-    inc: { pct: 0.015, fwShare: 1, minMode: 'off', minValue: 0, excludeMgmt: true },
+    inc: { pct: 0.015, fwShare: 1, minMode: 'off', minValue: 0, excludeMgmt: true, headPoints: 2 },
+    // Outlets the attendance can be assigned to (Settings → Outlets). kind 'central' = funded by the other outlets' CK/HQ %.
+    outlets: [
+      { name: 'Pavilion KL', company: 'CHAMPION VISTA SDN BHD', title: 'PAVILION KUALA LUMPUR', code: 'PKL', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'Pavilion Bukit Jalil', company: 'CHAMPION VISTA SDN BHD', title: 'PAVILION BUKIT JALIL', code: 'PBJ', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'Intermark', company: 'CHAMPION VISTA SDN BHD', title: 'INTERMARK', code: 'INTERMARK', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'KLIA 1', company: 'CHAMPION VISTA SDN BHD', title: 'KLIA 1', code: 'KLIA 1', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'KLIA 2 (L2)', company: 'CHAMPION VISTA SDN BHD', title: 'KLIA 2 (L2)', code: 'KLIA 2 (L2)', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'KLIA 2 (L3)', company: 'CHAMPION VISTA SDN BHD', title: 'KLIA 2 (L3)', code: 'KLIA 2 (L3)', kind: 'outlet', tab: 'FF92D050' },
+      { name: 'Genting', company: 'ALIRAN TIASA SDN BHD', title: 'GENTING', code: 'GENTING', kind: 'outlet', tab: 'FFFFFF00' },
+      { name: 'Central Kitchen', company: 'CHAMPION VISTA SDN BHD', title: 'CENTRAL KITCHEN', code: 'CENTRAL KITCHEN', kind: 'central', tab: 'FF92D050' },
+    ],
     codes: DEFAULT_CODES,
     formulas: Object.fromEntries(Object.entries(DEFAULT_FORMULAS).map(([k, v]) => [k, v.expr])),
     colors: {
@@ -368,7 +380,7 @@
       s.codes[code] = (s.codes[code] || 0) + 1;
       if (code === 'BLANK') s.blank++;
       switch (cat) {
-        case 'WORK': s.worked++; if (settings.lateDetection && isLate(rec.firstIn, settings.shiftStart, settings.lateGraceMinutes)) { s.late++; s.lateDays_.push(d); } break;
+        case 'WORK': s.worked++; if (/\bLATE\b/i.test(rec.note || '') || (settings.lateDetection && isLate(rec.firstIn, settings.shiftStart, settings.lateGraceMinutes))) { s.late++; s.lateDays_.push(d); } break;
         case 'NODEDUCT': s.nodeduct++; if (code in s) s[code]++; break;
         case 'MC': s.MC++; s.mcDays.push(d); break;
         case 'UPL': s.UPL++; s.uplDays.push(d); break;
@@ -395,7 +407,7 @@
   // notEmployed, mc, upl, absent, lateDays, overrides{K,L,...}, fixedAmount, inIncentive
   function rowInputs(row, scheme, settings, dim) {
     const isFW = row.category === 'FW';
-    const base = scheme === 'inc' ? num(row.incBase, num(row.base, 1)) : num(row.base, 1);
+    const base = scheme === 'inc' ? num(row.incBase, row.outletHead && settings.inc.headPoints ? num(settings.inc.headPoints, 2) : num(row.base, 1)) : num(row.base, 1);
     const share = isFW ? (scheme === 'inc' ? num(settings.inc.fwShare, 1) : num(settings.fwShare, 0.25)) : 1;
     const companyShare = isFW && scheme === 'sc' ? num(settings.companyShare, 0.75) : 0;
     const upl = num(row.upl) + (settings.absentCountsAsUPL ? num(row.absent) : 0);
@@ -607,12 +619,17 @@
 
   function deptFromAttendance(d) {
     const x = String(d || '').toUpperCase();
-    if (x.includes('KITCHEN')) return 'KITCHEN';
-    if (x.includes('SERVICE')) return 'SERVICE';
-    return '';
+    if (x.includes('KITCHEN') || /CHEF|COOK|WOK|CUTTER/.test(x)) return 'KITCHEN';
+    if (x.includes('SERVICE') || /WAIT|CAPTAIN|CASHIER|BAR/.test(x)) return 'SERVICE';
+    return x.trim();
   }
-  function statusFromAttendance(d) {
+  const FW_PREFIX = { NHL: 'AGENT NHL', KHM: 'AGENT KHM', TFH: 'AGENT TFH', KCS: 'AGENT KCS', SS: 'AGENT SS', SMS: 'AGENT SMS', ED: 'EDISIJUTA' };
+  function statusFromAttendance(d, empId) {
+    const pre = (/^([A-Z]+)\d/i.exec(String(empId || '').trim()) || [])[1];
+    if (pre && FW_PREFIX[pre.toUpperCase()]) return { status: FW_PREFIX[pre.toUpperCase()], category: 'FW' };
+    if (pre && pre.toUpperCase() === 'CL') return { status: 'CASUAL LABOUR', category: 'CASUAL' };
     const x = String(d || '').toUpperCase().trim();
+    if (/^(ADMIN|DRIVER|CHEF|COOK|CASHIER|WAITER|WAITRESS|CAPTAIN|BAR|MANAGER|SUPERVISOR|STEWARD)/.test(x)) return { status: 'PERMANENT', category: 'PERM' };
     if (/^(FT|PT)?\s*(SERVICE|KITCHEN)$/.test(x) || x.startsWith('FT ')) return { status: 'PERMANENT', category: 'PERM' };
     if (x.includes('CASUAL')) return { status: 'CASUAL LABOUR', category: 'CASUAL' };
     if (x) return { status: 'AGENT ' + x, category: 'FW' };
@@ -628,7 +645,43 @@
     return '';
   }
 
-  function applyAttendance(outlet, records, settings, dim) {
+  // ------------------------------------------------------------------ staff memory ("directory")
+  // Remembers what HR typed (position, join date, status, points…) so next month's attendance is pre-filled.
+  const PROFILE = ['dept', 'empNo', 'name', 'position', 'joinDate', 'resignDate', 'status', 'category', 'base', 'incBase', 'rasa', 'outletHead', 'fromOutlet', 'keepWithoutAttendance', 'inIncentive'];
+  const dirKey = (r) => (r.empNo && /\d/.test(r.empNo) ? 'id:' + normId(r.empNo) : 'nm:' + nameTokens(r.name).sort().join(' '));
+  function rememberOutlet(dir, outlet) {
+    for (const r of outlet.employees || []) {
+      if (!r.name || r.name === 'NEW STAFF' || r.name === 'HQ MANAGER') continue;
+      const prof = { outlet: outlet.sheetName, updated: Date.now() };
+      if (r.category === 'MGMT') prof.keepWithoutAttendance = true;
+      PROFILE.forEach((k) => { if (r[k] !== undefined && r[k] !== '') prof[k] = r[k]; });
+      dir[dirKey(r)] = prof;
+    }
+    return dir;
+  }
+  function lookupDirectory(dir, rec) {
+    if (!dir) return null;
+    if (rec.employeeId && /\d/.test(rec.employeeId) && dir['id:' + normId(rec.employeeId)]) return dir['id:' + normId(rec.employeeId)];
+    const k = 'nm:' + nameTokens(rec.name).sort().join(' ');
+    if (dir[k]) return dir[k];
+    let best = null, bs = 0;
+    for (const p of Object.values(dir)) { const sc = nameScore(rec.name, p.name); if (sc > bs) { bs = sc; best = p; } }
+    return bs >= 0.95 ? best : null;
+  }
+
+  // Build an outlet's staff list straight from the attendance file (no last-month workbook needed).
+  function buildOutletFromAttendance(outlet, records, settings, dim, dir, month) {
+    const keep = Object.values(dir || {}).filter((p) => p.keepWithoutAttendance && p.outlet === outlet.sheetName);
+    outlet.employees = keep.map((p) => newRow({ ...p, include: true, remembered: true }));
+    return applyAttendance(outlet, records, settings, dim, { createAll: true, dir, month });
+  }
+  function newRow(f) {
+    return { id: 'r' + Math.random().toString(36).slice(2, 9), dept: '', empNo: '', name: '', position: '', joinDate: '', resignDate: '', status: 'PERMANENT', category: 'PERM', base: 1,
+      rasa: false, outletHead: false, fromOutlet: '', helperNote: '', isNew: false, exitType: '', waiveTier: false, mc: 0, upl: 0, absent: 0, lateDays: 0, notEmployed: 0,
+      overrides: {}, incOverrides: {}, extraRemark: '', include: true, flags: [], ...f };
+  }
+
+  function applyAttendance(outlet, records, settings, dim, opts = {}) {
     const rows = outlet.employees;
     const report = { matched: [], added: [], blank: [], missing: [], mismatches: [] };
     const matches = matchAttendance(records, rows);
@@ -639,12 +692,22 @@
       if (s.allBlank) { report.blank.push(rec.name); if (m.row) { m.row.include = false; m.row.flags = ['Attendance blank – not recorded']; touched.add(m.row); } continue; }
       let row = m.row;
       if (!row) {
-        const st = statusFromAttendance(rec.department);
-        row = { id: 'r' + Math.random().toString(36).slice(2, 9), dept: deptFromAttendance(rec.department), empNo: rec.employeeId || '', attendanceId: rec.employeeId || '', name: rec.name,
-          position: '', joinDate: '', resignDate: '', status: st.status, category: st.category, base: 1, rasa: false, outletHead: false,
-          fromOutlet: helperOutlet(rec.notes, outlet.code), helperNote: '', isNew: false, exitType: '', waiveTier: false, overrides: {}, incOverrides: {}, extraRemark: '', include: true, addedFromAttendance: true };
+        const st = statusFromAttendance(rec.department, rec.employeeId);
+        const dept = deptFromAttendance(rec.department);
+        const known = opts.createAll ? lookupDirectory(opts.dir, rec) : null;
+        const rawDept = String(rec.department || '').toUpperCase().trim();
+        row = newRow({ dept, empNo: rec.employeeId || '', attendanceId: rec.employeeId || '', name: rec.name,
+          position: /^(ADMIN|DRIVER|CHEF|COOK|CASHIER|WAITER|WAITRESS|CAPTAIN|SUPERVISOR)$/.test(rawDept) ? rawDept : '', status: st.status, category: st.category, rasa: /^RG\d/i.test(rec.employeeId || ''),
+          fromOutlet: helperOutlet(rec.notes, outlet.code), addedFromAttendance: true });
+        if (known) { PROFILE.forEach((k) => { if (known[k] !== undefined && k !== 'keepWithoutAttendance') row[k] = known[k]; }); row.remembered = true; }
         if (row.fromOutlet) row.helperNote = `Helping from ${row.fromOutlet}`;
-        row.include = false; // not in the master list: HR ticks "Include" for genuine new joiners / helpers
+        // createAll: the attendance file IS the staff list. Otherwise (matching to an existing list) new names wait for HR.
+        row.include = opts.createAll ? !row.fromOutlet : false;
+        // staff who start / leave during the month (NOTEMP days at the start / end)
+        const firstEmp = rec.days.findIndex((d) => String(d.code).toUpperCase() !== 'NOTEMP');
+        const lastEmp = dim - 1 - [...rec.days].reverse().findIndex((d) => String(d.code).toUpperCase() !== 'NOTEMP');
+        if (!row.joinDate && firstEmp > 0 && opts.month) { row.joinDate = `${opts.month}-${String(firstEmp + 1).padStart(2, '0')}`; row.isNew = true; row.joinEstimated = true; }
+        if (!row.resignDate && lastEmp < dim - 1 && lastEmp >= 0 && /resign|last day/i.test(rec.notes || '') && opts.month) { row.resignDate = `${opts.month}-${String(lastEmp + 1).padStart(2, '0')}`; }
         rows.push(row); report.added.push(rec.name);
       } else report.matched.push({ att: rec.name, row: row.name, score: Math.round(m.score * 100) / 100 });
       touched.add(row);
@@ -659,7 +722,10 @@
         if (row.waiveTier && !/appeal|approved/i.test((row.template && row.template.remarks) || '')) row.waiveTier = false;
       }
       const flags = [];
-      if (row.addedFromAttendance) flags.push(row.fromOutlet ? `Staff of ${row.fromOutlet} helping here (${s.worked} days) – not given points; add to "Fixed SC approved by COO" or tick Include` : 'Not in master list – tick Include if new joiner, then fill position, status, join date');
+      if (row.addedFromAttendance && row.fromOutlet) flags.push(`Staff of ${row.fromOutlet} helping here (${s.worked} days) – not given points; add to "Fixed SC approved by COO" or tick Include`);
+      else if (row.addedFromAttendance && !opts.createAll) flags.push('Not in the staff list – tick Include if new joiner, then fill position, status, join date');
+      if (row.joinEstimated) flags.push(`Join date estimated from the log (first day ${row.joinDate.slice(8)}) – please confirm`);
+      if (opts.createAll && !row.remembered && row.category !== 'FW') row.info = 'New to this tool – fill position / join date once; it is remembered next month';
       if (s.ABSENT) flags.push(`${s.ABSENT} day(s) with no punch and no code (${s.absentDays.join(', ')}) counted as absent`);
       if (s.REVIEW) flags.push(`Unknown code on day(s) ${s.reviewDays.join(', ')}`);
       const ht = String(rec.handwrittenTotal || '').replace(/[()\s]/g, '');
@@ -675,7 +741,7 @@
     }
     for (const r of rows) {
       if (touched.has(r)) continue;
-      if (r.category === 'MGMT' || r.keepWithoutAttendance || (r.fromOutlet && !r.addedFromAttendance)) { r.flags = []; r.info = 'Not on this attendance file – kept (management / helper)'; continue; }
+      if (r.category === 'MGMT' || r.keepWithoutAttendance || r.remembered || (r.fromOutlet && !r.addedFromAttendance)) { r.flags = []; r.info = 'Not on this attendance file – kept (management / helper)'; continue; }
       r.include = false; r.flags = ['No attendance record found – not recorded']; report.missing.push(r.name);
     }
     return report;
@@ -684,7 +750,7 @@
   const api = {
     parse, evaluate, toExcel, identifiers, render, substitute, xlRound, FUNCS, VARIABLES, DEFAULT_FORMULAS, DEFAULT_SETTINGS, DEFAULT_CODES,
     mergeSettings, deepClone, daysInMonth, tierFor, codeCategory, summariseDays, isLate, rowInputs, computeRowPoints, allocateRow,
-    computeOutlet, computeWorkspace, includedRows, autoRemark, rowStyle, nameTokens, nameScore, normId, matchAttendance, deptFromAttendance, statusFromAttendance, num, applyAttendance, helperOutlet,
+    computeOutlet, computeWorkspace, includedRows, autoRemark, rowStyle, nameTokens, nameScore, normId, matchAttendance, deptFromAttendance, statusFromAttendance, num, applyAttendance, helperOutlet, buildOutletFromAttendance, rememberOutlet, lookupDirectory, newRow, dirKey,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.GMM = root.GMM || {}; root.GMM.engine = api;
